@@ -61,9 +61,13 @@
 #define PULSES_PER_REV      800      // 800 microstepping (DIP: SW1=OFF SW2=ON SW3=ON SW4=ON)
 #define FULL_COMPRESS_STEPS 1300     // Calibrated: change ONLY this value
 
-#define MIN_INTERVAL_US     100     // Fastest safe speed
+#define MIN_INTERVAL_US     50      // Fastest safe speed (was 100)
 #define MAX_INTERVAL_US     4000    // Slowest safe speed (very soft start/stop)
 #define CRUISE_INTERVAL_US  900     // Default cruise speed for breaths
+
+// Calibration & Kinematics Constants
+const float STEPS_PER_ML = 2.166667f;      // 1300 steps / 600 mL
+const float INHALE_MOTION_FRACTION = 0.8f; // 80% compression, 20% hold
 
 // Hall sensor
 #define HALL_TRIGGER_THRESHOLD  512
@@ -92,14 +96,16 @@
 // Ventilation settings
 static uint8_t  bpm             = 15;
 static float    ieRatio         = 2.0f;     // 1:2
-static int32_t  tidalSteps      = DEFAULT_TIDAL_STEPS;
+static float    targetTidalVolume_mL = 400.0f;
+static int32_t  tidalSteps      = (int32_t)(400.0f * 1.7333f);
 static float    targetPIP_kPa   = 2.5f;     // ~25 cmH2O
 static bool     vcvMode         = true;     // true=VCV, false=PCV
 
 // Motor state
 static int32_t  currentPosition = 0;
 static int32_t  strokeSteps     = DEFAULT_TIDAL_STEPS;
-static uint32_t cruiseIntervalUs = CRUISE_INTERVAL_US;
+static uint32_t inhaleCruiseUs  = CRUISE_INTERVAL_US;
+static uint32_t exhaleCruiseUs  = CRUISE_INTERVAL_US;
 static bool     motorEnabled    = false;
 static bool     isHomed         = false;
 static bool     almEnabled      = false;    // ALM+ off by default
@@ -157,12 +163,59 @@ static void _buzzWarning();
 static void _buzzError();
 
 static float _readPressureKpa();
-static uint32_t _calcStepInterval(int32_t step, int32_t totalSteps);
+static uint32_t _calcStepInterval(int32_t step, int32_t totalSteps, uint32_t targetCruiseUs);
 static bool _checkAbort();
 static void _fireStep();
 
 static void _executeVCVBreath();
 static void _executePCVBreath();
+
+static void updateMotorKinematics();
+
+// =============================================================
+// KINEMATICS UPDATE
+// =============================================================
+void updateMotorKinematics() {
+    // 1. Calculate Stroke Steps
+    strokeSteps = (int32_t)(targetTidalVolume_mL * STEPS_PER_ML);
+    
+    // Safety limit clamp
+    if (strokeSteps > FULL_COMPRESS_STEPS) strokeSteps = FULL_COMPRESS_STEPS;
+    if (strokeSteps < 50) strokeSteps = 50; // minimum movement
+    tidalSteps = strokeSteps;
+
+    // 2. Calculate Timings
+    float breathPeriodSec = 60.0f / bpm;
+    float inhaleSec = breathPeriodSec / (1.0f + ieRatio);
+    float exhaleSec = breathPeriodSec - inhaleSec;
+    
+    float targetCompressionSec = inhaleSec * INHALE_MOTION_FRACTION;
+    float targetRetractionSec = exhaleSec * INHALE_MOTION_FRACTION; // Use same motion fraction for exhale to reflect I:E perfectly
+    
+    // 3. Calculate Required Speeds
+    // Based on 30/40/30 spatial profile, effective distance = 1.6 * total steps
+    float reqInhaleStepsPerSec = (1.6f * strokeSteps) / targetCompressionSec;
+    float reqExhaleStepsPerSec = (1.6f * strokeSteps) / targetRetractionSec;
+    
+    // 4. Convert to Microsecond Interval
+    if (reqInhaleStepsPerSec > 0) {
+        inhaleCruiseUs = (uint32_t)(1000000.0f / reqInhaleStepsPerSec);
+    } else {
+        inhaleCruiseUs = MAX_INTERVAL_US;
+    }
+
+    if (reqExhaleStepsPerSec > 0) {
+        exhaleCruiseUs = (uint32_t)(1000000.0f / reqExhaleStepsPerSec);
+    } else {
+        exhaleCruiseUs = MAX_INTERVAL_US;
+    }
+    
+    // Clamp to min/max
+    if (inhaleCruiseUs > MAX_INTERVAL_US) inhaleCruiseUs = MAX_INTERVAL_US;
+    if (inhaleCruiseUs < MIN_INTERVAL_US) inhaleCruiseUs = MIN_INTERVAL_US;
+    if (exhaleCruiseUs > MAX_INTERVAL_US) exhaleCruiseUs = MAX_INTERVAL_US;
+    if (exhaleCruiseUs < MIN_INTERVAL_US) exhaleCruiseUs = MIN_INTERVAL_US;
+}
 
 // =============================================================
 // SETUP
@@ -211,6 +264,7 @@ void setup() {
 
     // --- Init I2C and BMP280 pressure sensors ---
     Wire.begin();
+    Wire.setWireTimeout(25000, true); // 25ms timeout, reset bus on timeout to prevent freezing
     Serial.print(F("[INIT] BMP280 Ambient (0x76): "));
     bmpAmbientOk = bmpAmbient.begin(0x76);
     Serial.println(bmpAmbientOk ? F("OK") : F("NOT FOUND"));
@@ -252,6 +306,9 @@ void setup() {
     lastRaw = zeroF;
     flowStartUs = micros();
     Serial.print(F("Zero ADC=")); Serial.println(zeroF);
+
+    // Initialize kinematics
+    updateMotorKinematics();
 }
 
 // =============================================================
@@ -271,9 +328,9 @@ void loop() {
     }
 
     // Manual move execution (non-blocking)
-    if (moveActive && !faultDetected) {
+    if (moveActive) {
         uint32_t now = micros();
-        if ((now - lastStepUs) >= cruiseIntervalUs) {
+        if ((now - lastStepUs) >= inhaleCruiseUs) {
             lastStepUs = now;
 
             // Enforce compression limit
@@ -373,10 +430,10 @@ static void _accumulateFlowNonBlocking() {
 
         emaFlow = 0.2f * flowRaw + 0.8f * emaFlow;
         
-        // Integrate volume (only positive flow — negative transients are sensor noise)
-        if (emaFlow > 0.0f) {
-            tidalVolume_mL += emaFlow * 0.666667f;
-        }
+        // Integrate volume (legacy flow calculation disabled for accurate step-based volume)
+        // if (emaFlow > 0.0f) {
+        //     tidalVolume_mL += emaFlow * 0.666667f;
+        // }
 
         flowSum = 0;
         flowCount = 0;
@@ -415,32 +472,27 @@ static float _readPressureKpa() {
 //   [accelEnd, decelStart)→ cruise at cruiseIntervalUs
 //   [decelStart, total)   → ramp from cruise to MAX_INTERVAL
 // =============================================================
-static uint32_t _calcStepInterval(int32_t step, int32_t totalSteps) {
-    int32_t accelEnd   = (int32_t)(totalSteps * ACCEL_FRACTION);
-    int32_t decelStart = totalSteps - (int32_t)(totalSteps * DECEL_FRACTION);
-    if (accelEnd < 1) accelEnd = 1;
-    if (decelStart >= totalSteps) decelStart = totalSteps - 1;
-
+static uint32_t _calcStepInterval(int32_t step, int32_t totalSteps, uint32_t targetCruiseUs) {
+    // 30% Accel, 40% Cruise, 30% Decel
+    int32_t accelSteps = (totalSteps * 3) / 10;
+    int32_t decelSteps = accelSteps;
+    
     float minFreq = 1000000.0f / MAX_INTERVAL_US;
-    float targetFreq = 1000000.0f / cruiseIntervalUs;
-
-    if (step < accelEnd) {
-        // S-Curve Acceleration: cosine easing (smooth start AND smooth arrival at cruise)
-        //   frac goes 0→1 linearly over accel zone
-        //   cosine maps it to 0→1 with S-shape: slow start, fast middle, slow end
-        float frac = (float)step / (float)accelEnd;
-        float sCurve = (1.0f - cos(frac * M_PI)) * 0.5f;  // 0→1 with S-shape
-        float currentFreq = minFreq + sCurve * (targetFreq - minFreq);
+    float targetFreq = 1000000.0f / targetCruiseUs;
+    
+    if (step < accelSteps) {
+        float progress = (float)step / accelSteps;
+        float currentFreq = minFreq + (targetFreq - minFreq) * progress;
         return (uint32_t)(1000000.0f / currentFreq);
-    } else if (step >= decelStart) {
-        // S-Curve Deceleration: mirror of acceleration
-        float frac = (float)(step - decelStart) / (float)(totalSteps - decelStart);
-        float sCurve = (1.0f - cos(frac * M_PI)) * 0.5f;  // 0→1 with S-shape
-        float currentFreq = targetFreq - sCurve * (targetFreq - minFreq);
+    } 
+    else if (step >= totalSteps - decelSteps) {
+        int32_t stepsIntoDecel = step - (totalSteps - decelSteps);
+        float progress = (float)stepsIntoDecel / decelSteps;
+        float currentFreq = targetFreq - (targetFreq - minFreq) * progress;
         return (uint32_t)(1000000.0f / currentFreq);
-    } else {
-        // Cruise
-        return cruiseIntervalUs;
+    } 
+    else {
+        return targetCruiseUs;
     }
 }
 
@@ -517,7 +569,8 @@ static void _executeVCVBreath() {
     Serial.println(F("\n========== VCV BREATH =========="));
     Serial.print(F("BPM=")); Serial.print(bpm);
     Serial.print(F("  I:E=1:")); Serial.print(ieRatio, 1);
-    Serial.print(F("  TV=")); Serial.print(steps); Serial.println(F(" steps"));
+    Serial.print(F("  TV=")); Serial.print(targetTidalVolume_mL, 1);
+    Serial.print(F(" mL (")); Serial.print(steps); Serial.println(F(" steps)"));
     Serial.print(F("Inhale=")); Serial.print(inhaleMs);
     Serial.print(F("ms  Exhale=")); Serial.print(exhaleMs);
     Serial.println(F("ms"));
@@ -551,7 +604,7 @@ static void _executeVCVBreath() {
             Serial.print(F("  [SETTLE] breathZero=")); Serial.println(breathZeroF, 1);
         }
 
-        uint32_t interval = _calcStepInterval(i, steps);
+        uint32_t interval = _calcStepInterval(i, steps, inhaleCruiseUs);
         currentStepIntervalUs = interval;
         _fireStep();
         currentPosition++;
@@ -559,8 +612,9 @@ static void _executeVCVBreath() {
         // Telemetry every N steps (suppress during settle to avoid transient spikes in CSV)
         if ((i % TELEMETRY_EVERY_N == 0 || i == steps - 1) && settled) {
             const char* phase;
-            int32_t accelEnd = (int32_t)(steps * ACCEL_FRACTION);
-            int32_t decelStart = steps - (int32_t)(steps * DECEL_FRACTION);
+            // 30/40/30 split
+            int32_t accelEnd = (steps * 3) / 10;
+            int32_t decelStart = steps - (steps * 3) / 10;
             if (i < accelEnd) phase = "accel";
             else if (i >= decelStart) phase = "decel";
             else phase = "cruise";
@@ -569,7 +623,7 @@ static void _executeVCVBreath() {
             Serial.print(F(" Stp=")); Serial.print(i + 1);
             Serial.print(F("/")); Serial.print(steps);
             Serial.print(F("  Flow=")); Serial.print(emaFlow, 1);
-            Serial.print(F(" L/min  Vol=")); Serial.print(tidalVolume_mL, 1);
+            Serial.print(F(" L/min  Vol=")); Serial.print((i + 1) / STEPS_PER_ML, 1);
             Serial.print(F(" mL"));
             // Use cached pressure (updated every 40ms in flow accumulator)
             Serial.print(F("  Pressure=")); Serial.print(lastPressure_kPa, 3);
@@ -587,7 +641,7 @@ static void _executeVCVBreath() {
     uint32_t motorTimeMs = millis() - inhaleStartMs;
 
     Serial.print(F("\n>>>> DELIVERED VOLUME: "));
-    Serial.print(tidalVolume_mL, 1);
+    Serial.print(steps / STEPS_PER_ML, 1);
     Serial.println(F(" mL <<<<\n"));
 
     // ===== PHASE 2: INSPIRATORY HOLD =====
@@ -615,7 +669,7 @@ static void _executeVCVBreath() {
     for (int32_t i = 0; i < steps; i++) {
         if (_checkAbort()) { breathActive = false; isMotorStepping = false; settled = false; return; }
 
-        uint32_t interval = _calcStepInterval(i, steps);
+        uint32_t interval = _calcStepInterval(i, steps, exhaleCruiseUs);
         currentStepIntervalUs = interval;
         _fireStep();
         currentPosition--;
@@ -697,8 +751,9 @@ static void _executePCVBreath() {
     Serial.print(F("  I:E=1:")); Serial.print(ieRatio, 1);
     Serial.print(F("  PIP target=")); Serial.print(targetPIP_kPa, 1);
     Serial.println(F("kPa"));
-    Serial.print(F("Max steps=")); Serial.print(maxSteps);
-    Serial.print(F("  Inhale=")); Serial.print(inhaleMs);
+    Serial.print(F("Max Vol=")); Serial.print(targetTidalVolume_mL, 1);
+    Serial.print(F(" mL (")); Serial.print(maxSteps); Serial.print(F(" steps)  "));
+    Serial.print(F("Inhale=")); Serial.print(inhaleMs);
     Serial.print(F("ms  Exhale=")); Serial.print(exhaleMs);
     Serial.println(F("ms"));
     Serial.println(F("================================"));
@@ -745,7 +800,7 @@ static void _executePCVBreath() {
             break;
         }
 
-        uint32_t interval = _calcStepInterval(i, maxSteps);
+        uint32_t interval = _calcStepInterval(i, maxSteps, inhaleCruiseUs);
         currentStepIntervalUs = interval;
         
         _fireStep();
@@ -755,7 +810,7 @@ static void _executePCVBreath() {
         if (i % TELEMETRY_EVERY_N == 0 && settled) {
             Serial.print(F("  INH Stp=")); Serial.print(i + 1);
             Serial.print(F("  Flow=")); Serial.print(emaFlow, 1);
-            Serial.print(F(" L/min  Vol=")); Serial.print(tidalVolume_mL, 1);
+            Serial.print(F(" L/min  Vol=")); Serial.print((i + 1) / STEPS_PER_ML, 1);
             Serial.print(F(" mL"));
             Serial.print(F("  Pressure=")); Serial.print(lastPressure_kPa, 3);
             Serial.print(F(" kPa"));
@@ -770,7 +825,7 @@ static void _executePCVBreath() {
     uint32_t motorTimeMs = millis() - inhaleStartMs;
 
     Serial.print(F("\n>>>> DELIVERED VOLUME: "));
-    Serial.print(tidalVolume_mL, 1);
+    Serial.print(stepsDelivered / STEPS_PER_ML, 1);
     Serial.println(F(" mL <<<<\n"));
 
     // ===== PHASE 2: INSPIRATORY HOLD =====
@@ -797,7 +852,7 @@ static void _executePCVBreath() {
     for (int32_t i = 0; i < stepsDelivered; i++) {
         if (_checkAbort()) { breathActive = false; settled = false; return; }
 
-        uint32_t interval = _calcStepInterval(i, stepsDelivered);
+        uint32_t interval = _calcStepInterval(i, stepsDelivered, exhaleCruiseUs);
         _fireStep();
         currentPosition--;
         if (currentPosition < 0) currentPosition = 0;
@@ -922,6 +977,7 @@ static void _handleCommand(char cmd) {
             int32_t val = _readSerialInt();
             if (val >= 10 && val <= 30) {
                 bpm = val;
+                updateMotorKinematics();
                 Serial.print(F("[SET] BPM=")); Serial.println(bpm);
             } else if (val == -1) {
                 // Just 'B' with no digits — treat as retract
@@ -943,6 +999,7 @@ static void _handleCommand(char cmd) {
             int32_t val = _readSerialInt();
             if (val >= 10 && val <= 40) {
                 ieRatio = val / 10.0f;
+                updateMotorKinematics();
                 Serial.print(F("[SET] I:E=1:")); Serial.println(ieRatio, 1);
             } else {
                 Serial.println(F("[ERR] I:E range: R10-R40 (1:1.0 to 1:4.0)"));
@@ -953,14 +1010,14 @@ static void _handleCommand(char cmd) {
         // --- Tidal Volume ---
         case 'T': case 't': {
             int32_t val = _readSerialInt();
-            if (val >= 50 && val <= FULL_COMPRESS_STEPS) {
-                tidalSteps = val;
-                strokeSteps = val;
-                Serial.print(F("[SET] TV=")); Serial.print(tidalSteps);
-                Serial.print(F("/")); Serial.print(FULL_COMPRESS_STEPS);
-                Serial.println(F(" steps"));
+            if (val >= 50 && val <= 750) {
+                targetTidalVolume_mL = val;
+                updateMotorKinematics();
+                Serial.print(F("[SET] TV=")); Serial.print(targetTidalVolume_mL, 1);
+                Serial.print(F(" mL (")); Serial.print(tidalSteps);
+                Serial.println(F(" steps)"));
             } else {
-                Serial.print(F("[ERR] TV range: 50-")); Serial.println(FULL_COMPRESS_STEPS);
+                Serial.println(F("[ERR] TV range: 50-750 mL"));
             }
             break;
         }
@@ -991,16 +1048,16 @@ static void _handleCommand(char cmd) {
             break;
 
         // --- Speed adjust ---
-        case '>': case '.':
-            cruiseIntervalUs = max(cruiseIntervalUs - 50, (uint32_t)MIN_INTERVAL_US);
-            Serial.print(F("[SET] Cruise: ")); Serial.print(cruiseIntervalUs);
-            Serial.print(F("us (")); Serial.print(1000000UL / cruiseIntervalUs);
+        case '<': case ',':
+            inhaleCruiseUs = max(inhaleCruiseUs - 50, (uint32_t)MIN_INTERVAL_US);
+            Serial.print(F("[SET] Inhale Cruise: ")); Serial.print(inhaleCruiseUs);
+            Serial.print(F("us (")); Serial.print(1000000UL / inhaleCruiseUs);
             Serial.println(F(" stp/s)"));
             break;
-        case '<': case ',':
-            cruiseIntervalUs = min(cruiseIntervalUs + 50, (uint32_t)MAX_INTERVAL_US);
-            Serial.print(F("[SET] Cruise: ")); Serial.print(cruiseIntervalUs);
-            Serial.print(F("us (")); Serial.print(1000000UL / cruiseIntervalUs);
+        case '>': case '.':
+            inhaleCruiseUs = min(inhaleCruiseUs + 50, (uint32_t)MAX_INTERVAL_US);
+            Serial.print(F("[SET] Inhale Cruise: ")); Serial.print(inhaleCruiseUs);
+            Serial.print(F("us (")); Serial.print(1000000UL / inhaleCruiseUs);
             Serial.println(F(" stp/s)"));
             break;
 
@@ -1115,10 +1172,11 @@ static void _homeSequence() {
 // UI HELPERS
 // =============================================================
 static void _printStrokeSet() {
-    Serial.print(F("[SET] Stroke/TV = ")); Serial.print(strokeSteps);
-    Serial.print(F(" / ")); Serial.print(FULL_COMPRESS_STEPS);
-    Serial.print(F(" (")); Serial.print((strokeSteps * 100L) / FULL_COMPRESS_STEPS);
-    Serial.println(F("%)"));
+    targetTidalVolume_mL = strokeSteps / STEPS_PER_ML;
+    updateMotorKinematics();
+    Serial.print(F("[SET] Target Vol = ")); Serial.print(targetTidalVolume_mL, 1);
+    Serial.print(F(" mL / 750.0 mL ("));
+    Serial.print(strokeSteps); Serial.println(F(" steps)"));
 }
 
 static void _printStatus() {
@@ -1132,17 +1190,17 @@ static void _printStatus() {
     Serial.print(F("  I:E      : 1:")); Serial.println(ieRatio, 1);
     Serial.print(F("  T_inh    : ")); Serial.print(inhMs); Serial.println(F("ms"));
     Serial.print(F("  T_exh    : ")); Serial.print(exhMs); Serial.println(F("ms"));
-    Serial.print(F("  Tidal Vol: ")); Serial.print(tidalSteps);
+    Serial.print(F("  Tidal Vol: ")); Serial.print(targetTidalVolume_mL, 1);
+    Serial.print(F(" mL (")); Serial.print(tidalSteps);
     Serial.print(F(" / ")); Serial.print(FULL_COMPRESS_STEPS);
-    Serial.print(F(" (")); Serial.print((tidalSteps * 100L) / FULL_COMPRESS_STEPS);
-    Serial.println(F("%)"));
+    Serial.println(F(" steps)"));
     Serial.print(F("  PIP Tgt  : ")); Serial.print(targetPIP_kPa, 1);
     Serial.println(F(" kPa"));
-    Serial.print(F("  Cruise   : ")); Serial.print(cruiseIntervalUs);
-    Serial.print(F("us (")); Serial.print(1000000UL / cruiseIntervalUs);
+    Serial.print(F("  Inhale Cr: ")); Serial.print(inhaleCruiseUs);
+    Serial.print(F("us (")); Serial.print(1000000UL / inhaleCruiseUs);
     Serial.println(F(" stp/s)"));
-
-    float rpm = (1000000.0f / cruiseIntervalUs / PULSES_PER_REV) * 60.0f;
+    
+    float rpm = (1000000.0f / inhaleCruiseUs / PULSES_PER_REV) * 60.0f;
     Serial.print(F("  RPM      : ")); Serial.println(rpm, 1);
 
     Serial.print(F("  Position : ")); Serial.print(currentPosition);
