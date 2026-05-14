@@ -1,6 +1,6 @@
 // ===========================================================
 // Filters.h — Service Layer: Signal Processing
-// Smart E-Ventilator Firmware v1.1
+// Smart E-Ventilator Firmware v2.0
 // ===========================================================
 #ifndef FILTERS_H
 #define FILTERS_H
@@ -25,6 +25,15 @@ float Filter_EMA_GetValue(const EMA_Filter* f);
 // =============================================================
 float Filter_VoltageToKpa(float voltage);    // MPX5010DP voltage -> kPa
 float Filter_KpaToFlowLPM(float kpa);       // Venturi Bernoulli -> L/min
+
+// =============================================================
+// Direct ADC-based Flow Calculation (validated from test code)
+// Uses dead zone + sqrt-based Bernoulli without Venturi tube.
+// =============================================================
+#define FLOW_DEAD_ZONE_ADC   1.0f     // Suppress noise below this ADC delta
+#define FLOW_K_FACTOR        6.09f    // Calibrated: L/min per sqrt(Pa)
+
+float Filter_AdcToFlowLPM(float deltaADC);  // ADC delta -> L/min
 
 // =============================================================
 // Venturi Tube Configuration  (D1 = 22 mm, D2 = 12 mm)

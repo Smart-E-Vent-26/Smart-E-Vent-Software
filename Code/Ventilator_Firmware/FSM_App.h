@@ -1,6 +1,13 @@
 // ===========================================================
 // FSM_App.h — Application Layer: Ventilator State Machine
-// Smart E-Ventilator Firmware v1.0
+// Smart E-Ventilator Firmware v2.0
+//
+// Changes from v1.0:
+//   - Added STATE_HOLD (inspiratory plateau) and STATE_PAUSE
+//   - Tidal volume in mL instead of raw steps
+//   - Step-based volume reporting (not flow-integrated)
+//   - Dynamic kinematics from clinical settings
+//   - User-triggered homing calibration
 // ===========================================================
 #ifndef FSM_APP_H
 #define FSM_APP_H
@@ -11,11 +18,13 @@
 // VENTILATOR STATES
 // =============================================================
 typedef enum {
-    STATE_BOOT,         // Power-on initialization
-    STATE_CALIBRATE,    // Find max compression via Hall sensor
-    STATE_READY,        // Calibrated, waiting to start
-    STATE_INHALE,       // Motor compressing Ambu bag
-    STATE_EXHALE,       // Motor retracting
+    STATE_BOOT,         // Power-on, waiting for user to trigger calibration
+    STATE_CALIBRATE,    // Homing via Hall sensor (user-triggered)
+    STATE_READY,        // Calibrated, waiting to start ventilation
+    STATE_INHALE,       // Motor compressing Ambu bag (S-Curve profile)
+    STATE_HOLD,         // Inspiratory hold / plateau (motor stationary)
+    STATE_EXHALE,       // Motor retracting (S-Curve profile)
+    STATE_PAUSE,        // Expiratory pause (motor at home)
     STATE_FAULT         // Critical alarm — motor disabled
 } VentState;
 
@@ -33,7 +42,7 @@ typedef enum {
 typedef struct {
     uint8_t  bpm;                   // Breaths per minute (10–30)
     float    ieRatio;               // I:E denominator (e.g. 2.0 → 1:2)
-    int32_t  tidalVolumeSteps;      // VCV target stroke (motor steps)
+    float    targetTidalVolume_mL;  // VCV target volume in mL (50–600)
     float    targetPIP_kPa;         // PCV target peak pressure (kPa)
     int32_t  maxCompressSteps;      // Physical limit from calibration
 } VentSettings;
@@ -50,16 +59,18 @@ VentMode  FSM_GetMode();
 void      FSM_SetMode(VentMode mode);
 void      FSM_SetBPM(uint8_t bpm);
 void      FSM_SetIERatio(float ratio);
-void      FSM_SetTidalVolumeSteps(int32_t steps);
+void      FSM_SetTidalVolumeMl(float ml);
 void      FSM_SetTargetPIP(float kpa);
 
 void      FSM_StartVentilation();   // READY -> INHALE
-void      FSM_StopVentilation();    // Any  -> READY
+void      FSM_StopVentilation();    // Any   -> READY
+void      FSM_StartCalibration();   // BOOT  -> CALIBRATE (user-triggered)
 
 // Getters for telemetry / serial display
 const VentSettings* FSM_GetSettings();
 float     FSM_GetCurrentPressure();
 float     FSM_GetCurrentFlowLPM();
+float     FSM_GetDeliveredVolumeMl();   // Steps / STEPS_PER_ML
 uint32_t  FSM_GetInhaleTimeMs();
 uint32_t  FSM_GetExhaleTimeMs();
 void      FSM_SetGraphMode(bool enabled);
