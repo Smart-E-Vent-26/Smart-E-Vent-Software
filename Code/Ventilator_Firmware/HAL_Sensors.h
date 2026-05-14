@@ -1,6 +1,6 @@
 // ===========================================================
 // HAL_Sensors.h — Hardware Abstraction Layer: Sensor Reads
-// Smart E-Ventilator Firmware v1.0
+// Smart E-Ventilator Firmware v2.0
 // ===========================================================
 #ifndef HAL_SENSORS_H
 #define HAL_SENSORS_H
@@ -22,12 +22,25 @@
 #define HALL_TRIGGER_THRESHOLD  512
 
 // =============================================================
-// PUBLIC API
+// PUBLIC API — Analog Sensors
 // =============================================================
 void     HAL_Sensors_Init();
 uint16_t HAL_Sensors_ReadFlowRaw();         // Raw 10-bit ADC
 float    HAL_Sensors_ReadFlowVoltage();     // Converted to Volts
 uint16_t HAL_Sensors_ReadHallRaw();         // Raw 10-bit ADC
 bool     HAL_Sensors_IsHallTriggered();     // true = at max compression limit
+
+// =============================================================
+// PUBLIC API — BMP280 Dual Pressure Sensors (I2C)
+// =============================================================
+bool     HAL_Sensors_InitPressure();        // Init BMP280 pair (0x76 + 0x77)
+float    HAL_Sensors_ReadPressureKpa();     // Differential: airway - ambient
+bool     HAL_Sensors_IsPressureOk();        // Both BMP280s responding?
+
+// =============================================================
+// PUBLIC API — Flow Sensor Auto-Zero
+// =============================================================
+void     HAL_Sensors_AutoZeroFlow();        // 3s warm-up + 40ms averaging
+float    HAL_Sensors_GetFlowZero();         // Current ADC zero baseline
 
 #endif // HAL_SENSORS_H

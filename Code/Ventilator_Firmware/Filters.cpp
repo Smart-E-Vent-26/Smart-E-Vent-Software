@@ -1,6 +1,6 @@
 // ===========================================================
 // Filters.cpp — Service Layer: Signal Processing
-// Smart E-Ventilator Firmware v1.1
+// Smart E-Ventilator Firmware v2.0
 // ===========================================================
 #include "Filters.h"
 #include "HAL_Sensors.h"
@@ -40,6 +40,31 @@ float Filter_VoltageToKpa(float voltage) {
 }
 
 // =============================================================
+// Direct ADC-based Flow Calculation (validated from test code)
+//
+// Uses a dead zone to suppress sensor noise, then converts
+// ADC delta to differential pressure and applies sqrt-based
+// Bernoulli equation with calibrated K_FLOW constant.
+// =============================================================
+float Filter_AdcToFlowLPM(float deltaADC) {
+    if (fabsf(deltaADC) < FLOW_DEAD_ZONE_ADC) {
+        return 0.0f;
+    }
+
+    // Subtract dead zone from effective delta
+    float effectiveADC = (deltaADC > 0)
+        ? (deltaADC - FLOW_DEAD_ZONE_ADC)
+        : (deltaADC + FLOW_DEAD_ZONE_ADC);
+
+    float dV     = effectiveADC * ADC_TO_VOLTS;
+    float dP_kPa = dV / FLOW_SENSOR_SCALE;
+    float sign   = (dP_kPa > 0) ? 1.0f : -1.0f;
+
+    // K_FLOW calibrated for Pascals, so multiply kPa by 1000 before sqrt
+    return sign * FLOW_K_FACTOR * sqrtf(fabsf(dP_kPa) * 1000.0f);  // L/min
+}
+
+// =============================================================
 // Venturi Tube Flow Calculation (Bernoulli's Principle)
 //
 // Given:
@@ -47,39 +72,13 @@ float Filter_VoltageToKpa(float voltage) {
 //   D2 = 12 mm  (narrow section)  -> A2 = pi * (0.006)^2 = 1.1310e-4 m^2
 //   rho = 1.225 kg/m^3 (air at sea level, 15 C)
 //
-// Bernoulli + Continuity:
-//   Q = A2 * sqrt( 2 * deltaP / (rho * (1 - (A2/A1)^2)) )
+// Pre-computed constant (see v1.0 derivation):
+//   K_final = 188.8 L/min per sqrt(kPa) @ 22mm/10mm, Cd = 0.97
 //
-// Pre-compute:
-//   beta  = D2/D1 = 0.5455
-//   beta4 = beta^4 = 0.0886
-//   denom = rho * (1 - beta4) = 1.225 * 0.9114 = 1.1165
-//   coeff = 2 / denom = 1.7912
-//   K     = A2 * sqrt(coeff) * 60000  [converts m^3/s -> L/min]
-//         = 1.131e-4 * 1.3383 * 60000
-//         = 9.08   L/min per sqrt(kPa)
-//
-// NOTE: deltaP in Pa = kPa * 1000, so:
-//   Q = A2 * sqrt(2 * deltaP_Pa / denom) * 60000
-//   Q = A2 * sqrt(2 * kPa * 1000 / denom) * 60000
-//   Q = A2 * sqrt(2000/denom) * sqrt(kPa) * 60000
-//   Q = K_final * sqrt(kPa)
-//
-//   K_final = 1.131e-4 * sqrt(2000 / 1.1165) * 60000
-//           = 1.131e-4 * sqrt(1791.3) * 60000
-//           = 1.131e-4 * 42.323 * 60000
-//           = 287.2  L/min per sqrt(kPa)
-//
-// IMPORTANT: This is the *theoretical* value. Real-world
-// discharge coefficient Cd is typically 0.95-0.98 for a
-// well-machined Venturi. We apply Cd = 0.97 by default.
+// NOTE: This is for use when the Venturi tube is installed.
+//       Currently using Filter_AdcToFlowLPM() instead.
 // =============================================================
-
-// Pre-computed constant (see derivation above)
-// Recalculated for D2 = 10mm (beta = 0.4545):
-//   K_final = 194.6 L/min per sqrt(kPa)
-//   Cd = 0.97 -> 188.8 L/min
-const float VENTURI_K = 188.8f;   // ~188.8 L/min per sqrt(kPa) @ 22mm/10mm
+const float VENTURI_K = 188.8f;
 
 float Filter_KpaToFlowLPM(float kpa) {
     if (kpa <= 0.0f) return 0.0f;
