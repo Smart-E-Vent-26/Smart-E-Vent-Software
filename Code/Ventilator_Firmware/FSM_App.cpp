@@ -169,9 +169,11 @@ void FSM_Update() {
         bool isExhalePhase = (_state == STATE_EXHALE || _state == STATE_PAUSE);
         float calcFlow = Kin_GetInstantaneousFlowLPM(isExhalePhase);
 
+        float pressureCmH2O = _currentPressureKpa * 10.1972f;
+
         if (_graphMode) {
             // Serial Plotter format
-            Serial.print(_currentPressureKpa, 2);
+            Serial.print(pressureCmH2O, 2);
             Serial.print('\t');
             Serial.print(_currentFlowLPM, 1);
             Serial.print('\t');
@@ -188,8 +190,8 @@ void FSM_Update() {
                 default:           phaseLabel = "???"; break;
             }
             Serial.print(F("  ")); Serial.print(phaseLabel);
-            Serial.print(F(" P=")); Serial.print(_currentPressureKpa, 2);
-            Serial.print(F("kPa  Flow=")); Serial.print(_currentFlowLPM, 1);
+            Serial.print(F(" Pressure=")); Serial.print(pressureCmH2O, 2);
+            Serial.print(F("cmH2O  Flow=")); Serial.print(_currentFlowLPM, 1);
             Serial.print(F("L/min  CalcFlow=")); Serial.print(calcFlow, 1);
             Serial.print(F("L/min  Vol="));
             Serial.print(FSM_GetDeliveredVolumeMl(), 1);
