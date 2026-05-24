@@ -25,14 +25,26 @@ void Safety_Init() {
 // Checks hardware alarm line and airway pressure limits.
 // =============================================================
 void Safety_Update(float currentPressureKpa) {
-    // 1. Check motor driver ALM+ line
+    // 1. Check motor driver ALM+ line with debounce (EMI protection)
+    static uint8_t driverAlarmCount = 0;
     if (HAL_Motor_ReadAlarm()) {
-        _faultCode |= FAULT_DRIVER_ALARM;
+        driverAlarmCount++;
+        if (driverAlarmCount >= 5) {  // ~200ms of continuous alarm signal
+            _faultCode |= FAULT_DRIVER_ALARM;
+        }
+    } else {
+        driverAlarmCount = 0;
     }
 
-    // 2. Check airway overpressure
+    // 2. Check airway overpressure with debounce
+    static uint8_t pressureAlarmCount = 0;
     if (currentPressureKpa > SAFETY_MAX_PIP_KPA) {
-        _faultCode |= FAULT_OVERPRESSURE;
+        pressureAlarmCount++;
+        if (pressureAlarmCount >= 3) { // ~120ms of continuous overpressure
+            _faultCode |= FAULT_OVERPRESSURE;
+        }
+    } else {
+        pressureAlarmCount = 0;
     }
 
     // 3. If ANY fault is active → hard-stop motor, alarm outputs
