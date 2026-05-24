@@ -61,6 +61,12 @@ bool    Kin_IsComplete();
 // How many steps have been completed in the current / last move.
 int32_t Kin_GetStepsCompleted();
 
+// Get current step interval (used for flow calculation)
+uint32_t Kin_GetCurrentIntervalUs();
+
+// Calculate Virtual Flow (LPM) mathematically from motor velocity
+float   Kin_GetInstantaneousFlowLPM(bool isExhale);
+
 // =============================================================
 // PUBLIC API — Dynamic Kinematics (links clinical → motor)
 // =============================================================

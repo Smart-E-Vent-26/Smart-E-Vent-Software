@@ -143,6 +143,23 @@ void    Kin_Stop()              { _move.active = false; }
 bool    Kin_IsComplete()        { return !_move.active; }
 int32_t Kin_GetStepsCompleted() { return _move.stepsCompleted; }
 
+uint32_t Kin_GetCurrentIntervalUs() {
+    return _move.active ? _computeCurrentInterval() : 0;
+}
+
+float Kin_GetInstantaneousFlowLPM(bool isExhale) {
+    uint32_t interval = Kin_GetCurrentIntervalUs();
+    if (interval == 0 || !_move.active) {
+        return 0.0f;
+    }
+    // Flow (L/min) = (Volume_per_Step_mL / intervalUs) * 60,000
+    // Volume_per_Step_mL = 1.0f / MECH_STEPS_PER_ML
+    float volPerStep = 1.0f / MECH_STEPS_PER_ML;
+    float flowLPM = (volPerStep / (float)interval) * 60000.0f;
+    
+    return isExhale ? -flowLPM : flowLPM;
+}
+
 // =============================================================
 // DYNAMIC KINEMATICS — Links clinical settings to motor params
 //

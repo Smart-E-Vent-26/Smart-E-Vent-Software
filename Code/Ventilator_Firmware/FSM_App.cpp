@@ -166,11 +166,16 @@ void FSM_Update() {
         (now - _lastTelemetryMs) >= TELEMETRY_PRINT_INTERVAL_MS) {
         _lastTelemetryMs = now;
 
+        bool isExhalePhase = (_state == STATE_EXHALE || _state == STATE_PAUSE);
+        float calcFlow = Kin_GetInstantaneousFlowLPM(isExhalePhase);
+
         if (_graphMode) {
             // Serial Plotter format
             Serial.print(_currentPressureKpa, 2);
             Serial.print('\t');
             Serial.print(_currentFlowLPM, 1);
+            Serial.print('\t');
+            Serial.print(calcFlow, 1);
             Serial.print('\t');
             Serial.println(Kin_GetStepsCompleted());
         } else {
@@ -185,6 +190,7 @@ void FSM_Update() {
             Serial.print(F("  ")); Serial.print(phaseLabel);
             Serial.print(F(" P=")); Serial.print(_currentPressureKpa, 2);
             Serial.print(F("kPa  Flow=")); Serial.print(_currentFlowLPM, 1);
+            Serial.print(F("L/min  CalcFlow=")); Serial.print(calcFlow, 1);
             Serial.print(F("L/min  Vol="));
             Serial.print(FSM_GetDeliveredVolumeMl(), 1);
             Serial.print(F("mL  Stp="));
