@@ -4,10 +4,12 @@ import time
 import re
 import serial
 import serial.tools.list_ports
+import csv
+from collections import deque
 
 os.environ["QT_IM_MODULE"] = "none" 
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
+from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -82,6 +84,10 @@ class VentilatorCore(QObject):
     ie_ratio_changed = Signal()
     target_pip_changed = Signal()
 
+    is_logging_changed = Signal()
+    log_filename_changed = Signal()
+    log_limit_changed = Signal()
+
     def __init__(self):
         super().__init__()
         self._rr = 15
@@ -89,6 +95,16 @@ class VentilatorCore(QObject):
         self._mode = "VCV"
         self._ie_ratio = "1:2"
         self._target_pip = 20
+        
+        self._is_logging = False
+        self._log_filename = os.path.expanduser("~/vent_data.csv")
+        self._log_limit = 10000
+        self.log_buffer = deque(maxlen=self._log_limit)
+        
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self._flush_log)
+        self.log_timer.start(5000)
+
         self.reader = None
         self.connect_arduino()
 
@@ -98,10 +114,26 @@ class VentilatorCore(QObject):
             if "Arduino" in p.description or "ttyACM" in p.device:
                 # Initialize the threaded reader
                 self.reader = SerialReader(p.device)
-                self.reader.new_data.connect(self.telemetry_updated.emit)
+                self.reader.new_data.connect(self._on_telemetry_updated)
                 self.reader.start()
                 return
         print("[SYSTEM] No Arduino found.")
+
+    def _on_telemetry_updated(self, t, p, v, f, cf):
+        self.telemetry_updated.emit(t, p, v, f, cf)
+        if self._is_logging:
+            self.log_buffer.append([t, p, v, f, cf, self._mode, self._rr, self._tidal_volume, self._ie_ratio, self._target_pip])
+
+    def _flush_log(self):
+        if not self._is_logging or not self.log_buffer:
+            return
+        try:
+            with open(self._log_filename, 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Time", "Pressure", "Volume", "PhysicalFlow", "CalcFlow", "Mode", "RR", "TV", "IERatio", "PIP"])
+                writer.writerows(self.log_buffer)
+        except Exception as e:
+            print(f"[ERROR] Failed to save log: {e}")
 
     def send_command(self, cmd):
         if self.reader:
@@ -112,6 +144,8 @@ class VentilatorCore(QObject):
     def startVentilation(self): self.send_command("S")
     @Slot()
     def stopVentilation(self): self.send_command("X")
+    @Slot()
+    def emergencyStop(self): self.send_command("E")
     @Slot()
     def calibrateHome(self): self.send_command("H")
 
@@ -161,6 +195,34 @@ class VentilatorCore(QObject):
             self._target_pip = value
             self.send_command(f"I{value}")
             self.target_pip_changed.emit()
+
+    @Property(bool, notify=is_logging_changed)
+    def is_logging(self): return self._is_logging
+    @is_logging.setter
+    def is_logging(self, value):
+        if self._is_logging != value:
+            self._is_logging = value
+            self.is_logging_changed.emit()
+            if value: print(f"[LOG] Started logging to {self._log_filename}")
+
+    @Property(str, notify=log_filename_changed)
+    def log_filename(self): return self._log_filename
+    @log_filename.setter
+    def log_filename(self, value):
+        if self._log_filename != value:
+            self._log_filename = value
+            self.log_filename_changed.emit()
+
+    @Property(int, notify=log_limit_changed)
+    def log_limit(self): return self._log_limit
+    @log_limit.setter
+    def log_limit(self, value):
+        if self._log_limit != value:
+            self._log_limit = value
+            # Recreate deque with new limit, copying existing data
+            new_buffer = deque(self.log_buffer, maxlen=value)
+            self.log_buffer = new_buffer
+            self.log_limit_changed.emit()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

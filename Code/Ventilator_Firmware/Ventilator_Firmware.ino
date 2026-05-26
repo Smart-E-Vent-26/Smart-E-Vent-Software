@@ -159,7 +159,10 @@ static void _processSerialCommand() {
             FSM_StartVentilation();
             break;
         case 'X': case 'x':
-            FSM_StopVentilation();
+            FSM_SoftStopVentilation();
+            break;
+        case 'E': case 'e':
+            FSM_EmergencyStop();
             break;
 
         // --- Homing (user-triggered) ---

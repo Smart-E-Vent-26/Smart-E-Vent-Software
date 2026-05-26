@@ -187,6 +187,8 @@ void FSM_Update() {
                 case STATE_HOLD:   phaseLabel = "HLD"; break;
                 case STATE_EXHALE: phaseLabel = "EXH"; break;
                 case STATE_PAUSE:  phaseLabel = "PAU"; break;
+                case STATE_SOFT_STOP_WAIT: phaseLabel = "S_W"; break;
+                case STATE_RETRACT_HOME: phaseLabel = "S_R"; break;
                 default:           phaseLabel = "???"; break;
             }
             Serial.print(F("  ")); Serial.print(phaseLabel);
@@ -383,6 +385,41 @@ void FSM_Update() {
     }
 
     // ----------------------------------------------------------
+    // SOFT STOP WAIT: Pausing 1.5s before retracting
+    // ----------------------------------------------------------
+    case STATE_SOFT_STOP_WAIT:
+        if ((now - _stateEntryMs) >= 1500UL) {
+            Serial.println(F("[FSM] Retracting slowly to home..."));
+            HAL_Motor_Enable();
+            HAL_Motor_SetDirection(MOTOR_DIR_RETRACT);
+            Kin_PlanConstantMove(KIN_CALIBRATE_INTERVAL_US);
+            _state = STATE_RETRACT_HOME;
+            _stateEntryMs = now;
+        }
+        break;
+
+    // ----------------------------------------------------------
+    // RETRACT HOME: Slowly moving to home sensor
+    // ----------------------------------------------------------
+    case STATE_RETRACT_HOME:
+        if (HAL_Sensors_IsHallTriggered()) {
+            Kin_Stop();
+            HAL_Motor_Disable();
+            Safety_SetLEDs(true, false, false);
+            _state = STATE_READY;
+            _stateEntryMs = now;
+            Serial.println(F("[FSM] Soft Stop Complete. System READY."));
+        } else if ((now - _stateEntryMs) > 30000UL) {
+            Kin_Stop();
+            HAL_Motor_Disable();
+            Safety_SetFault(FAULT_HALL_NOT_FOUND);
+            Serial.println(F("[FSM] FAULT: Hall sensor not found during retract!"));
+        } else {
+            Kin_Update(); // Continue moving slowly
+        }
+        break;
+
+    // ----------------------------------------------------------
     // FAULT: Motor disabled, alarm active
     // ----------------------------------------------------------
     case STATE_FAULT:
@@ -433,13 +470,20 @@ void FSM_StartVentilation() {
     _startInhale();
 }
 
-void FSM_StopVentilation() {
+void FSM_SoftStopVentilation() {
+    Kin_Stop();
+    Safety_SetLEDs(false, true, false); // Yellow = pausing/waiting
+    _state        = STATE_SOFT_STOP_WAIT;
+    _stateEntryMs = HAL_GetMillis();
+    Serial.println(F("[FSM] Soft Stop requested. Pausing 1.5s..."));
+}
+
+void FSM_EmergencyStop() {
     Kin_Stop();
     HAL_Motor_Disable();
-    Safety_SetLEDs(true, false, false);
-    _state        = STATE_READY;
+    _state        = STATE_BOOT;
     _stateEntryMs = HAL_GetMillis();
-    Serial.println(F("[FSM] Ventilation STOPPED."));
+    Serial.println(F("[FSM] EMERGENCY STOPPED. Must Home (H) before starting again."));
 }
 
 void FSM_StartCalibration() {

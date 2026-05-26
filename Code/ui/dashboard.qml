@@ -179,7 +179,7 @@ ApplicationWindow {
                         contentItem: Text { text: parent.text; color: "#ffcc00"; font.pixelSize: 14; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
                     }
                     CheckBox {
-                        text: "Virtual Flow"
+                        text: "Calculated Flow"
                         checked: true
                         onCheckedChanged: calcFlowSeries.visible = checked
                         contentItem: Text { text: parent.text; color: "#00ccff"; font.pixelSize: 14; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
@@ -228,16 +228,30 @@ ApplicationWindow {
                         onClicked: VentCore.startVentilation() 
                     }
                     Button { 
-                        text: "STOP"; Layout.fillWidth: true; background: Rectangle { color: "#D32F2F"; radius: 5 }
+                        text: "STOP"; Layout.fillWidth: true; background: Rectangle { color: "#F57C00"; radius: 5 }
                         contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                         onClicked: VentCore.stopVentilation() 
                     }
                 }
                 
                 Button { 
+                    text: "EMERGENCY STOP"; Layout.fillWidth: true; background: Rectangle { color: "#D32F2F"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: VentCore.emergencyStop() 
+                }
+
+                Button { 
                     text: "HOME CALIBRATE"; Layout.fillWidth: true; background: Rectangle { color: "#1565C0"; radius: 5 }
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.calibrateHome() 
+                }
+
+                Button {
+                    text: "DATA LOGGING SETTINGS"
+                    Layout.fillWidth: true
+                    background: Rectangle { color: "#555"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: loggingDialog.open()
                 }
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: "#444"; Layout.topMargin: 5; Layout.bottomMargin: 5 }
@@ -294,6 +308,83 @@ ApplicationWindow {
                         SettingRow { label: "Tidal Vol"; val: VentCore.tidal_volume + " mL"; stackIndex: 2 }
                         SettingRow { label: "I:E Ratio"; val: VentCore.ie_ratio; stackIndex: 3 }
                         SettingRow { label: "Target PIP"; val: VentCore.target_pip + " cmH2O"; stackIndex: 4 }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: loggingDialog
+        title: "Data Logging Settings"
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        modal: true
+        standardButtons: Dialog.NoButton
+        
+        background: Rectangle {
+            color: "#1e1e1e"
+            radius: 10
+            border.color: "#444"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            spacing: 15
+            
+            CheckBox {
+                id: enableLoggingCheck
+                text: "Save Ventilation Data"
+                checked: VentCore.is_logging
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 16; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
+            }
+            
+            RowLayout {
+                Text { text: "File Name:"; color: "gray"; font.pixelSize: 14 }
+                TextField {
+                    id: logFilenameField
+                    text: VentCore.log_filename
+                    color: "white"
+                    background: Rectangle { color: "#333"; radius: 5 }
+                    Layout.fillWidth: true
+                }
+            }
+            
+            RowLayout {
+                Text { text: "Max Rows Limit:"; color: "gray"; font.pixelSize: 14 }
+                SpinBox {
+                    id: logLimitSpin
+                    value: VentCore.log_limit
+                    from: 1000
+                    to: 1000000
+                    stepSize: 1000
+                    editable: true
+                }
+            }
+            
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 20
+                Button {
+                    text: "Save Settings"
+                    background: Rectangle { color: "white"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "black"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        VentCore.log_filename = logFilenameField.text
+                        VentCore.log_limit = logLimitSpin.value
+                        VentCore.is_logging = enableLoggingCheck.checked
+                        loggingDialog.close()
+                    }
+                }
+                Button {
+                    text: "Cancel"
+                    background: Rectangle { color: "#D32F2F"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        enableLoggingCheck.checked = VentCore.is_logging
+                        logFilenameField.text = VentCore.log_filename
+                        logLimitSpin.value = VentCore.log_limit
+                        loggingDialog.close()
                     }
                 }
             }

@@ -25,6 +25,8 @@ typedef enum {
     STATE_HOLD,         // Inspiratory hold / plateau (motor stationary)
     STATE_EXHALE,       // Motor retracting (S-Curve profile)
     STATE_PAUSE,        // Expiratory pause (motor at home)
+    STATE_SOFT_STOP_WAIT, // Pausing 1.5s before retracting
+    STATE_RETRACT_HOME, // Slowly retracting to home position
     STATE_FAULT         // Critical alarm — motor disabled
 } VentState;
 
@@ -63,7 +65,8 @@ void      FSM_SetTidalVolumeMl(float ml);
 void      FSM_SetTargetPIP(float kpa);
 
 void      FSM_StartVentilation();   // READY -> INHALE
-void      FSM_StopVentilation();    // Any   -> READY
+void      FSM_SoftStopVentilation(); // Any -> WAIT -> RETRACT -> READY
+void      FSM_EmergencyStop();      // Any -> BOOT (Requires Homing)
 void      FSM_StartCalibration();   // BOOT  -> CALIBRATE (user-triggered)
 
 // Getters for telemetry / serial display
