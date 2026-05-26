@@ -31,7 +31,7 @@ float Filter_KpaToFlowLPM(float kpa);       // Venturi Bernoulli -> L/min
 // Uses dead zone + sqrt-based Bernoulli without Venturi tube.
 // =============================================================
 #define FLOW_DEAD_ZONE_ADC   1.0f     // Suppress noise below this ADC delta
-#define FLOW_K_FACTOR        6.09f    // Calibrated: L/min per sqrt(Pa)
+#define FLOW_K_FACTOR        15.0f    // Calibrated: L/min per sqrt(Pa)
 
 float Filter_AdcToFlowLPM(float deltaADC);  // ADC delta -> L/min
 

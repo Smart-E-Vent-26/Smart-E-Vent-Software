@@ -268,17 +268,22 @@ void FSM_Update() {
     // ----------------------------------------------------------
     case STATE_INHALE: {
         Kin_Update();
+       // Replace the old PCV block in FSM_Update() with this:
+if (_mode == MODE_PCV) {
+    float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
+    
+    // Proportional "Soft Landing" ramp
+    if (pressureError < 0.5f && pressureError > 0.0f) { 
+        float speedFactor = max(0.1f, pressureError / 0.5f); 
+        Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor)); 
+    }
+    
+    // Safety Hard-Stop
+    if (_currentPressureKpa >= _settings.targetPIP_kPa) {
+        Kin_Stop();
+    }
+}
 
-        // PCV: stop advancing once target PIP is reached
-        if (_mode == MODE_PCV &&
-            _currentPressureKpa >= _settings.targetPIP_kPa) {
-            Kin_Stop();
-            if (!_graphMode) {
-                Serial.print(F("  [PIP] Target reached at P="));
-                Serial.print(_currentPressureKpa, 2);
-                Serial.println(F(" kPa"));
-            }
-        }
 
         // Transition: motor done OR inhale time exceeded
         uint32_t elapsed = now - _stateEntryMs;

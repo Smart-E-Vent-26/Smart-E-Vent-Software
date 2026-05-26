@@ -10,8 +10,8 @@ Usage:
 
 Features:
   - 3 real-time subplots: Flow, Pressure, Volume
+  - Tracks both Physical Flow and Virtual (Calculated) Flow
   - CSV logging with ADC and voltage columns
-  - Auto-retry file naming if CSV is locked (e.g. open in Excel)
   - Background serial reader for smooth graphing
   - Terminal input forwarded to Arduino (type commands + Enter)
 """
@@ -38,15 +38,16 @@ OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'telemetr
 MAX_POINTS = 5000
 timestamps     = deque(maxlen=MAX_POINTS)
 flow_data      = deque(maxlen=MAX_POINTS)
+calc_flow_data = deque(maxlen=MAX_POINTS)  # ADDED: Virtual Flow Queue
 vol_data       = deque(maxlen=MAX_POINTS)
 pressure_data  = deque(maxlen=MAX_POINTS)
 
 # ---- Regex Parsers ----
-# Match lines like: INH cruise Stp=201/880  Flow=12.6 L/min  Vol=143.1 mL  Pressure=0.123 kPa  FlowADC=56  FlowVolt=0.274
-regex_flow     = re.compile(r'Flow=([-\d.]+)')
-regex_vol      = re.compile(r'Vol=([-\d.]+)')
-regex_pressure = re.compile(r'Pressure=([-\d.]+)')
-regex_flow_adc = re.compile(r'FlowADC=(\d+)')
+regex_flow      = re.compile(r'Flow=([-\d.]+)')
+regex_calc_flow = re.compile(r'CalcFlow=([-\d.]+)') # ADDED: Regex for CalcFlow
+regex_vol       = re.compile(r'Vol=([-\d.]+)')
+regex_pressure  = re.compile(r'Pressure=([-\d.]+)')
+regex_flow_adc  = re.compile(r'FlowADC=(\d+)')
 regex_flow_volt = re.compile(r'FlowVolt=([-\d.]+)')
 
 
@@ -76,34 +77,40 @@ def serial_reader(ser, stop_event, csv_writer, csv_file, start_time):
 
                     # 1. Parse Data
                     f_match  = regex_flow.search(line)
+                    cf_match = regex_calc_flow.search(line)
                     v_match  = regex_vol.search(line)
                     p_match  = regex_pressure.search(line)
-                    fa_match = regex_flow_adc.search(line)
-                    fv_match = regex_flow_volt.search(line)
 
-                    # We require flow and volume to update the graph and CSV
-                    # Pressure is optional (may not be present if BMP280s are disconnected)
+                    # Check which phase the ventilator is in
+                    is_exhaling = "EXH" in line or "PAU" in line
+
                     if f_match and v_match:
                         try:
                             f_val = float(f_match.group(1))
+                            cf_val = float(cf_match.group(1)) if cf_match else 0.0
                             v_val = float(v_match.group(1))
                             p_val = float(p_match.group(1)) if p_match else 0.0
-                            t_val = (time.time() - start_time) * 1000.0  # ms since start
+                            t_val = (time.time() - start_time) * 1000.0  
 
-                            # Optional ADC and voltage (may be absent)
-                            fa_val = fa_match.group(1) if fa_match else ''
-                            fv_val = fv_match.group(1) if fv_match else ''
+                            # --- THE VOLUME FIX ---
+                            # If exhaling, invert the volume so the graph drops back to zero
+                            if is_exhaling:
+                                v_val = 400.0 - v_val 
+                                if v_val < 0: v_val = 0.0 # Prevent it from dropping below zero
+                            # ----------------------
 
                             # 2. Append to graph queues
                             timestamps.append(t_val)
                             flow_data.append(f_val)
+                            calc_flow_data.append(cf_val) # ADDED: Queue CalcFlow
                             vol_data.append(v_val)
                             pressure_data.append(p_val)
 
-                            # 3. Save to CSV immediately
+                            # 3. Save to CSV immediately (Added CalcFlow to logging)
                             csv_writer.writerow([
                                 f"{t_val:.1f}",
                                 f"{f_val:.2f}",
+                                f"{cf_val:.2f}",
                                 f"{v_val:.1f}",
                                 f"{p_val:.3f}",
                                 fa_val,
@@ -119,7 +126,6 @@ def serial_reader(ser, stop_event, csv_writer, csv_file, start_time):
         except Exception:
             pass
 
-        # Yield to allow main thread to render graph
         time.sleep(0.001)
 
 
@@ -151,13 +157,12 @@ def open_csv_with_retry(base_path, max_attempts=10):
             continue
 
     print(f"ERROR: Could not create CSV file after {max_attempts} attempts.")
-    print(f"Please close {os.path.basename(base_path)} or any similar file open in Excel.")
     return None, None
 
 
 def main():
     print("=" * 50)
-    print("  TELEMETRY VISUALIZER")
+    print("  TELEMETRY VISUALIZER (DUAL FLOW)")
     print("  Smart E-Ventilator")
     print("=" * 50)
     print()
@@ -165,53 +170,35 @@ def main():
     port = find_arduino_port()
     if not port:
         print("ERROR: No COM ports found!")
-        print("Make sure Arduino is connected and Serial Monitor is CLOSED.")
         sys.exit(1)
 
     print(f"Connecting to {port} at {BAUD} baud...")
     try:
         ser = serial.Serial(port, BAUD, timeout=1)
-    except serial.SerialException as e:
+    except serial.SerialException:
         print(f"ERROR: Cannot open {port}")
-        print("Make sure Arduino Serial Monitor is CLOSED!")
         sys.exit(1)
 
-    time.sleep(2)  # Wait for Arduino reset
+    time.sleep(2)
     ser.reset_input_buffer()
 
-    # Open CSV file with retry logic
     csv_file, actual_file_path = open_csv_with_retry(OUTPUT_FILE)
     if csv_file is None:
         ser.close()
         sys.exit(1)
 
-    # Write CSV header
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(['time_ms', 'flow_Lmin', 'vol_mL', 'pressure_kPa', 'flow_adc', 'flow_voltage_V'])
+    csv_writer.writerow(['time_ms', 'flow_physical_Lmin', 'flow_virtual_Lmin', 'vol_mL', 'pressure_kPa', 'flow_adc', 'flow_voltage_V'])
     print(f"Logging to: {actual_file_path}")
 
     start_time = time.time()
     stop_event = threading.Event()
 
-    # Start background reader thread
-    reader_thread = threading.Thread(
-        target=serial_reader,
-        args=(ser, stop_event, csv_writer, csv_file, start_time),
-        daemon=True
-    )
+    reader_thread = threading.Thread(target=serial_reader, args=(ser, stop_event, csv_writer, csv_file, start_time), daemon=True)
     reader_thread.start()
 
-    # Start keyboard writer thread
-    kb_thread = threading.Thread(
-        target=keyboard_writer,
-        args=(ser, stop_event),
-        daemon=True
-    )
+    kb_thread = threading.Thread(target=keyboard_writer, args=(ser, stop_event), daemon=True)
     kb_thread.start()
-
-    print("\nStarting Real-Time Graph... Close the window to stop.")
-    print("Type 'C' in this terminal and hit Enter to trigger a breath, ")
-    print("                                                             or use the visualizer!")
 
     # ---- Setup Matplotlib Graph ----
     plt.style.use('dark_background')
@@ -220,12 +207,14 @@ def main():
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))
     fig.canvas.manager.set_window_title('Telemetry Visualizer')
 
-    # Flow Subplot
-    line_flow, = ax1.plot([], [], color='cyan', linewidth=2)
+    # Flow Subplot (NOW WITH TWO LINES)
+    line_flow, = ax1.plot([], [], color='cyan', linewidth=2, label='Physical Flow')
+    line_calc_flow, = ax1.plot([], [], color='orange', linewidth=2, linestyle=':', label='Virtual Flow')
     ax1.set_title('Real-Time Flow (L/min)', color='white')
     ax1.set_ylabel('Flow (L/min)')
     ax1.grid(True, color='#333333')
     ax1.axhline(0, color='gray', linestyle='--')
+    ax1.legend(loc='upper right', facecolor='black', edgecolor='white')
 
     # Pressure Subplot
     line_pressure, = ax2.plot([], [], color='magenta', linewidth=2)
@@ -245,19 +234,23 @@ def main():
     plt.show(block=False)
 
     try:
-        # Manual drawing loop (more stable than FuncAnimation for TkAgg)
         while plt.fignum_exists(fig.number):
             if len(timestamps) > 1:
                 ts_list = list(timestamps)
                 fl_list = list(flow_data)
+                cfl_list = list(calc_flow_data) # ADDED: Virtual flow list
                 pr_list = list(pressure_data)
                 vl_list = list(vol_data)
 
-                # Update Flow Line
+                # Update Flow Lines
                 line_flow.set_data(ts_list, fl_list)
+                line_calc_flow.set_data(ts_list, cfl_list) # ADDED: Draw virtual flow
                 ax1.set_xlim(ts_list[0], ts_list[-1])
-                min_f, max_f = min(fl_list), max(fl_list)
-                ax1.set_ylim(min_f - 10, max_f + 10)
+                
+                # Dynamic scaling to fit both flow lines
+                min_f = min(min(fl_list), min(cfl_list))
+                max_f = max(max(fl_list), max(cfl_list))
+                ax1.set_ylim(min_f - 5, max_f + 5)
 
                 # Update Pressure Line
                 line_pressure.set_data(ts_list, pr_list)
@@ -272,17 +265,15 @@ def main():
                 min_v, max_v = min(vl_list), max(vl_list)
                 ax3.set_ylim(min_v - 10, max_v + 50 if max_v > 0 else 100)
 
-            plt.pause(0.04)  # Render frame and process GUI events
+            plt.pause(0.04)
     except KeyboardInterrupt:
         pass
 
-    # Cleanup
     print("\nClosing Visualizer...")
     stop_event.set()
     ser.close()
     csv_file.close()
     print(f"Data saved to {actual_file_path}")
-
 
 if __name__ == '__main__':
     main()
