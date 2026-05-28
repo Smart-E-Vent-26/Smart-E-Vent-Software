@@ -272,13 +272,23 @@ void FSM_Update() {
         Kin_Update();
 
         // PCV: stop advancing once target PIP is reached
-        if (_mode == MODE_PCV &&
-            _currentPressureKpa >= _settings.targetPIP_kPa) {
-            Kin_Stop();
-            if (!_graphMode) {
-                Serial.print(F("  [PIP] Target reached at P="));
-                Serial.print(_currentPressureKpa, 2);
-                Serial.println(F(" kPa"));
+        if (_mode == MODE_PCV) {
+            float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
+            
+            // Proportional "Soft Landing" ramp
+            if (pressureError < 0.5f && pressureError > 0.0f) { 
+                float speedFactor = max(0.1f, pressureError / 0.5f); 
+                Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor)); 
+            }
+            
+            // Safety Hard-Stop
+            if (_currentPressureKpa >= _settings.targetPIP_kPa) {
+                Kin_Stop();
+                if (!_graphMode) {
+                    Serial.print(F("  [PIP] Target reached at P="));
+                    Serial.print(_currentPressureKpa, 2);
+                    Serial.println(F(" kPa"));
+                }
             }
         }
 
@@ -525,5 +535,11 @@ uint32_t  FSM_GetExhaleTimeMs()             { return _exhaleTimeMs; }
 void      FSM_SetGraphMode(bool enabled)    { _graphMode = enabled; }
 
 float FSM_GetDeliveredVolumeMl() {
-    return (float)Kin_GetStepsCompleted() / MECH_STEPS_PER_ML;
+    float currentVol = (float)Kin_GetStepsCompleted() / MECH_STEPS_PER_ML;
+    if (_state == STATE_EXHALE || _state == STATE_PAUSE || _state == STATE_RETRACT_HOME) {
+        float maxVol = (float)_currentInhaleSteps / MECH_STEPS_PER_ML;
+        float remaining = maxVol - currentVol;
+        return (remaining > 0.0f) ? remaining : 0.0f;
+    }
+    return currentVol;
 }
