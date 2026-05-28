@@ -6,6 +6,7 @@ import QtCharts
 ApplicationWindow {
     id: mainWindow
     visible: true
+    visibility: ApplicationWindow.FullScreen
     width: 1280
     height: 800
     title: "BVM Emergency Ventilator"
