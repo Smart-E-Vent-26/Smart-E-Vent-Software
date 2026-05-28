@@ -224,12 +224,19 @@ class VentilatorCore(QObject):
             self.log_buffer = new_buffer
             self.log_limit_changed.emit()
 
+    def shutdown(self):
+        """Gracefully stop background threads when the app closes."""
+        if self.reader:
+            self.reader.running = False
+            self.reader.wait(1000)
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     engine = QQmlApplicationEngine()
     
     vent_core = VentilatorCore()
     engine.rootContext().setContextProperty("VentCore", vent_core)
+    app.aboutToQuit.connect(vent_core.shutdown)
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     qml_file = os.path.join(current_dir, "dashboard.qml")
