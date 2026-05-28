@@ -9,7 +9,7 @@ from collections import deque
 
 os.environ["QT_IM_MODULE"] = "none" 
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -232,6 +232,7 @@ class VentilatorCore(QObject):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setOverrideCursor(Qt.BlankCursor)
     engine = QQmlApplicationEngine()
     
     vent_core = VentilatorCore()
