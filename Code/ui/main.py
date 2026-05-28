@@ -231,7 +231,9 @@ if __name__ == "__main__":
     vent_core = VentilatorCore()
     engine.rootContext().setContextProperty("VentCore", vent_core)
     
-    engine.load("dashboard.qml")
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    qml_file = os.path.join(current_dir, "dashboard.qml")
+    engine.load(qml_file)
     if not engine.rootObjects():
         sys.exit(-1)
     sys.exit(app.exec())
