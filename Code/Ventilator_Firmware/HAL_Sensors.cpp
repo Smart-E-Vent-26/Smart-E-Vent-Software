@@ -159,14 +159,15 @@ bool HAL_Sensors_IsHallTriggered() {
     uint16_t val = HAL_Sensors_ReadHallRaw();
     
     // DEBUG: Print the raw value to Serial twice a second so we can see what the sensor is actually outputting!
+    // Uncomment this block if you ever need to debug the Hall sensor in the future:
+    /*
     static uint32_t lastPrint = 0;
     if (millis() - lastPrint > 500) {
         Serial.print(F("[DEBUG] Raw Hall ADC: "));
         Serial.println(val);
         lastPrint = millis();
     }
+    */
     
-    // I have temporarily lowered the threshold to 200. 
-    // This will stop the machine from "instantly homing" due to noise around 512.
-    return (val < 200);
+    return (val < HALL_TRIGGER_THRESHOLD);
 }
