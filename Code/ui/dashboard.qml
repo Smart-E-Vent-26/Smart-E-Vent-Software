@@ -438,9 +438,9 @@ ApplicationWindow {
         id: inputPanel
         parent: Overlay.overlay
         z: 9999
-        y: Qt.inputMethod.visible ? parent.height - height : parent.height
-        anchors.left: parent.left
-        anchors.right: parent.right
+        // Explicitly use mainWindow dimensions to prevent the keyboard from collapsing to 0x0
+        width: mainWindow.width
+        y: Qt.inputMethod.visible ? mainWindow.height - inputPanel.height : mainWindow.height
         
         Behavior on y {
             NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
