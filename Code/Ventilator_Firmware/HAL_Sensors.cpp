@@ -156,10 +156,17 @@ uint16_t HAL_Sensors_ReadHallRaw() {
 }
 
 bool HAL_Sensors_IsHallTriggered() {
-    // The internal pull-up keeps the pin HIGH (~1023) when there is no magnet.
-    // When the A3144 detects a magnet, it pulls the pin to GND (~0).
-    // Therefore, if the analog reading is below the threshold, a magnet is present.
-    // This outputs 1 when magnet is present, and 0 when it is not.
     uint16_t val = HAL_Sensors_ReadHallRaw();
-    return (val < HALL_TRIGGER_THRESHOLD);
+    
+    // DEBUG: Print the raw value to Serial twice a second so we can see what the sensor is actually outputting!
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 500) {
+        Serial.print(F("[DEBUG] Raw Hall ADC: "));
+        Serial.println(val);
+        lastPrint = millis();
+    }
+    
+    // I have temporarily lowered the threshold to 200. 
+    // This will stop the machine from "instantly homing" due to noise around 512.
+    return (val < 200);
 }
