@@ -152,12 +152,14 @@ float HAL_Sensors_GetFlowZero() {
 // Hall Effect Sensor
 // =============================================================
 uint16_t HAL_Sensors_ReadHallRaw() {
-    return digitalRead(PIN_HALL_SENSOR);
+    return analogRead(PIN_HALL_SENSOR);
 }
 
 bool HAL_Sensors_IsHallTriggered() {
-    // With INPUT_PULLUP, open-collector sensor pulls LOW when magnet is detected.
-    // The user requested: no magnet = 0, magnet = 1.
-    // Therefore, we invert the digital read.
-    return !digitalRead(PIN_HALL_SENSOR);
+    // The internal pull-up keeps the pin HIGH (~1023) when there is no magnet.
+    // When the A3144 detects a magnet, it pulls the pin to GND (~0).
+    // Therefore, if the analog reading is below the threshold, a magnet is present.
+    // This outputs 1 when magnet is present, and 0 when it is not.
+    uint16_t val = HAL_Sensors_ReadHallRaw();
+    return (val < HALL_TRIGGER_THRESHOLD);
 }
