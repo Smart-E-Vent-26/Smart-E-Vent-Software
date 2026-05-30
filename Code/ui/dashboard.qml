@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtCharts 
+import QtQuick.VirtualKeyboard
 
 ApplicationWindow {
     id: mainWindow
@@ -14,15 +15,15 @@ ApplicationWindow {
 
     // --- Floating Exit Button ---
     Button {
-        text: "✕ EXIT"
+        text: "✕"
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 10
-        width: 80
+        width: 35
         height: 35
         z: 999  // Ensure it sits above the charts and panels!
         background: Rectangle { color: "#D32F2F"; radius: 5; border.color: "#B71C1C"; border.width: 2 }
-        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        contentItem: Text { text: parent.text; color: "white"; font.bold: true; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
         onClicked: VentCore.exitApp()
     }
 
@@ -429,6 +430,19 @@ ApplicationWindow {
         }
         function onMl_diagnostic_updated(status) {
             mlStatus.text = status
+        }
+    }
+
+    // --- Virtual Touchscreen Keyboard ---
+    InputPanel {
+        id: inputPanel
+        z: 9999
+        y: Qt.inputMethod.visible ? parent.height - height : parent.height
+        anchors.left: parent.left
+        anchors.right: parent.right
+        
+        Behavior on y {
+            NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
         }
     }
 }

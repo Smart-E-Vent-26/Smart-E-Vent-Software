@@ -6,7 +6,10 @@ import serial
 import serial.tools.list_ports
 import csv
 from collections import deque
+import os
 
+# Enable the built-in Qt On-Screen Virtual Keyboard for touchscreens
+os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication
