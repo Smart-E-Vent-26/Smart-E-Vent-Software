@@ -33,7 +33,10 @@ void HAL_Sensors_Init() {
     // Analog pins do not require pinMode on ATmega328P.
     // Perform a few dummy reads to let the ADC multiplexer settle.
     analogRead(PIN_FLOW_SENSOR);
-    analogRead(PIN_HALL_SENSOR);
+    
+    // Configure Hall Sensor as digital input with internal pull-up
+    pinMode(PIN_HALL_SENSOR, INPUT_PULLUP);
+    
     delay(10);
 }
 
@@ -146,14 +149,15 @@ float HAL_Sensors_GetFlowZero() {
 }
 
 // =============================================================
-// Hall Effect Sensor (AT3503 on A2)
+// Hall Effect Sensor
 // =============================================================
 uint16_t HAL_Sensors_ReadHallRaw() {
-    return analogRead(PIN_HALL_SENSOR);
+    return digitalRead(PIN_HALL_SENSOR);
 }
 
 bool HAL_Sensors_IsHallTriggered() {
-    // A3144 + 10K pull-up: LOW ADC value = magnet detected
-    uint16_t val = HAL_Sensors_ReadHallRaw();
-    return (val < HALL_TRIGGER_THRESHOLD);
+    // With INPUT_PULLUP, open-collector sensor pulls LOW when magnet is detected.
+    // The user requested: no magnet = 0, magnet = 1.
+    // Therefore, we invert the digital read.
+    return !digitalRead(PIN_HALL_SENSOR);
 }
