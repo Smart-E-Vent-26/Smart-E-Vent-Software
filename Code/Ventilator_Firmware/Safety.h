@@ -15,6 +15,7 @@
 #define FAULT_OVERPRESSURE      0x02
 #define FAULT_SENSOR_FAIL       0x04
 #define FAULT_HALL_NOT_FOUND    0x08
+#define FAULT_DISCONNECT        0x10
 
 // =============================================================
 // PRESSURE SAFETY LIMITS
@@ -27,6 +28,7 @@
 // =============================================================
 #define ALARM_TONE_CRITICAL     1000
 #define ALARM_TONE_WARNING      2000
+#define ALARM_TONE_DISCONNECT   1500
 
 // =============================================================
 // PUBLIC API

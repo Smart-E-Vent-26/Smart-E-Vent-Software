@@ -48,10 +48,27 @@ void Safety_Update(float currentPressureKpa) {
     }
 
     // 3. If ANY fault is active → hard-stop motor, alarm outputs
+    static uint32_t faultStartTime = 0;
     if (_faultCode != FAULT_NONE) {
         HAL_Motor_Disable();
         Safety_SetLEDs(false, false, true);         // Red only
-        Safety_BuzzerTone(ALARM_TONE_CRITICAL);
+        
+        if (faultStartTime == 0) faultStartTime = HAL_GetMillis();
+        
+        // Auto-mute the loud buzzer after 4 seconds to avoid sensory fatigue
+        if (HAL_GetMillis() - faultStartTime < 4000) {
+            if (_faultCode & FAULT_OVERPRESSURE) {
+                Safety_BuzzerTone(ALARM_TONE_CRITICAL); // 1000 Hz
+            } else if (_faultCode & FAULT_DISCONNECT) {
+                Safety_BuzzerTone(ALARM_TONE_DISCONNECT); // 1500 Hz
+            } else {
+                Safety_BuzzerTone(ALARM_TONE_WARNING); // 2000 Hz
+            }
+        } else {
+            Safety_BuzzerOff();
+        }
+    } else {
+        faultStartTime = 0; // reset auto-mute timer
     }
 }
 

@@ -96,11 +96,23 @@ bool HAL_Sensors_InitPressure() {
 // Returns (airway - ambient) in kPa
 // =============================================================
 float HAL_Sensors_ReadPressureKpa() {
+    static float lastValidKpa = 0.0f;
     if (_bmpAmbientOk && _bmpAirwayOk) {
         float pAirway  = _bmpAirway.readPressure();     // Pa
         float pAmbient = _bmpAmbient.readPressure();    // Pa
-        float currentKpa = ((pAirway - pAmbient) / 1000.0f) - _pressureOffsetKpa; // kPa
         
+        // --- I2C Lockup Recovery ---
+        if (isnan(pAirway) || isnan(pAmbient) || (pAirway == 0.0f && pAmbient == 0.0f)) {
+            Serial.println(F("[ERR] BMP280 I2C Lockup. Rebooting sensors..."));
+            _bmpAmbient.begin(0x76);
+            _bmpAirway.begin(0x77);
+            _bmpAmbient.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2, Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X4, Adafruit_BMP280::STANDBY_MS_63);
+            _bmpAirway.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2, Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X4, Adafruit_BMP280::STANDBY_MS_63);
+            return lastValidKpa;
+        }
+
+        float currentKpa = ((pAirway - pAmbient) / 1000.0f) - _pressureOffsetKpa; // kPa
+        lastValidKpa = currentKpa;
         return currentKpa;
     }
     return 0.0f;

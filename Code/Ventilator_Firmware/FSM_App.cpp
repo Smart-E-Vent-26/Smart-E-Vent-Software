@@ -53,6 +53,7 @@ static uint32_t _exhaleTimeMs    = 0;
 // Per-breath bookkeeping
 static int32_t  _currentInhaleSteps = 0;
 static float    _currentPressureKpa = 0.0f;
+static float    _peakPressureKpa    = 0.0f; // Track PIP for Disconnect Alarm
 static float    _currentFlowLPM     = 0.0f;
 static uint32_t _holdDurationMs     = 0;   // Inspiratory hold duration
 static uint32_t _pauseDurationMs    = 0;   // Expiratory pause duration
@@ -86,6 +87,9 @@ static void _updateKinematics() {
 // HELPER: begin a new inhale phase
 // =============================================================
 static void _startInhale() {
+    _stateEntryMs = HAL_GetMillis();
+    _peakPressureKpa = 0.0f; // Reset peak tracker for the new breath
+
     _updateKinematics();
 
     int32_t targetSteps;
@@ -271,6 +275,11 @@ void FSM_Update() {
     case STATE_INHALE: {
         Kin_Update();
 
+        // Track peak pressure for Disconnect Alarm
+        if (_currentPressureKpa > _peakPressureKpa) {
+            _peakPressureKpa = _currentPressureKpa;
+        }
+
         // PCV: stop advancing once target PIP is reached
         if (_mode == MODE_PCV) {
             float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
@@ -296,6 +305,12 @@ void FSM_Update() {
         uint32_t elapsed = now - _stateEntryMs;
         if (Kin_IsComplete() || elapsed >= _inhaleTimeMs) {
             _currentInhaleSteps = Kin_GetStepsCompleted();
+
+            // Disconnect Alarm Check (Peak pressure < 5 cmH2O)
+            if (_peakPressureKpa < 0.5f) {
+                Safety_SetFault(FAULT_DISCONNECT);
+                Serial.println(F("[FSM] FAULT: Patient Disconnected! (Peak PIP < 5 cmH2O)"));
+            }
 
             if (!_graphMode) {
                 Serial.print(F("\n  >> DELIVERED: "));
@@ -382,13 +397,34 @@ void FSM_Update() {
     // ----------------------------------------------------------
     // PAUSE: Expiratory pause — motor at home, waiting
     // Wait for _pauseDurationMs, then start next breath.
+    // Patient-Triggered Assist-Control (A/C) Mode is active here.
     // ----------------------------------------------------------
     case STATE_PAUSE: {
         uint32_t pauseElapsed = now - _stateEntryMs;
-        if (pauseElapsed >= _pauseDurationMs) {
+        
+        // --- Assist-Control (A/C) Trigger Logic ---
+        // If the patient attempts to inhale, the pressure will drop.
+        // We use a -0.2 kPa (-2.0 cmH2O) threshold.
+        static uint8_t acTriggerCount = 0;
+        if (_currentPressureKpa < -0.2f) {
+            acTriggerCount++;
+        } else {
+            acTriggerCount = 0;
+        }
+
+        // Require 3 consecutive slow-loop polls (approx 120ms) to trigger a breath.
+        // This acts as a debounce window to ignore random 40ms electrical spikes.
+        bool patientTriggered = (acTriggerCount >= 3);
+
+        if (pauseElapsed >= _pauseDurationMs || patientTriggered) {
             if (!_graphMode) {
-                Serial.println(F("========== BREATH COMPLETE ==========\n"));
+                if (patientTriggered) {
+                    Serial.println(F("========== PATIENT TRIGGERED BREATH ==========\n"));
+                } else {
+                    Serial.println(F("========== BREATH COMPLETE ==========\n"));
+                }
             }
+            acTriggerCount = 0; // reset
             _startInhale();
         }
         break;
