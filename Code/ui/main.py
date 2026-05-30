@@ -151,7 +151,7 @@ class VentilatorCore(QObject):
     def exitApp(self): 
         print("[SYSTEM] Exiting UI from Kiosk button.")
         self.shutdown()
-        QApplication.quit()
+        os._exit(0)
 
     # --- Properties and Serial Translation ---
     @Property(str, notify=mode_changed)

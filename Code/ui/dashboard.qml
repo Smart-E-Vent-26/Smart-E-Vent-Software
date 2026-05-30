@@ -20,8 +20,9 @@ ApplicationWindow {
         anchors.margins: 10
         width: 80
         height: 35
-        background: Rectangle { color: "#333"; radius: 5; border.color: "#555" }
-        contentItem: Text { text: parent.text; color: "#aaa"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        z: 999  // Ensure it sits above the charts and panels!
+        background: Rectangle { color: "#D32F2F"; radius: 5; border.color: "#B71C1C"; border.width: 2 }
+        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
         onClicked: VentCore.exitApp()
     }
 
