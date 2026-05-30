@@ -440,7 +440,7 @@ ApplicationWindow {
         z: 9999
         // Explicitly use mainWindow dimensions to prevent the keyboard from collapsing to 0x0
         width: mainWindow.width
-        y: Qt.inputMethod.visible ? mainWindow.height - inputPanel.height : mainWindow.height
+        y: active ? mainWindow.height - height : mainWindow.height
         
         Behavior on y {
             NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
