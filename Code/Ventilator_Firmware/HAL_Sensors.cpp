@@ -19,6 +19,7 @@ static Adafruit_BMP280 _bmpAmbient;   // 0x76
 static Adafruit_BMP280 _bmpAirway;    // 0x77
 static bool _bmpAmbientOk = false;
 static bool _bmpAirwayOk  = false;
+static float _pressureOffsetKpa = 0.0f;
 
 // =============================================================
 // FLOW SENSOR AUTO-ZERO STATE
@@ -64,6 +65,26 @@ bool HAL_Sensors_InitPressure() {
                                Adafruit_BMP280::STANDBY_MS_63);
     }
 
+    if (_bmpAmbientOk && _bmpAirwayOk) {
+        Serial.print(F("[INIT] Auto-zeroing pressure... "));
+        for (int i=0; i<5; i++) {
+            _bmpAirway.readPressure();
+            _bmpAmbient.readPressure();
+            delay(50);
+        }
+        float sumOffset = 0;
+        for(int i=0; i<10; i++) {
+            float pA = _bmpAirway.readPressure();
+            float pB = _bmpAmbient.readPressure();
+            sumOffset += (pA - pB) / 1000.0f;
+            delay(10);
+        }
+        _pressureOffsetKpa = sumOffset / 10.0f;
+        Serial.print(F("Offset = "));
+        Serial.print(_pressureOffsetKpa, 3);
+        Serial.println(F(" kPa"));
+    }
+
     return (_bmpAmbientOk && _bmpAirwayOk);
 }
 
@@ -77,7 +98,7 @@ float HAL_Sensors_ReadPressureKpa() {
     if (_bmpAmbientOk && _bmpAirwayOk) {
         float pAirway  = _bmpAirway.readPressure();     // Pa
         float pAmbient = _bmpAmbient.readPressure();    // Pa
-        float currentKpa = (pAirway - pAmbient) / 1000.0f; // kPa
+        float currentKpa = ((pAirway - pAmbient) / 1000.0f) - _pressureOffsetKpa; // kPa
 
         // --- SOFTWARE EMI SHIELD ---
         // 8.0 kPa is ~81 cmH2O. Human lungs pop at 40 cmH2O. 
