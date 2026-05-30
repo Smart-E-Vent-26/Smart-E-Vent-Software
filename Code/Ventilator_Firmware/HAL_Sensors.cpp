@@ -55,14 +55,14 @@ bool HAL_Sensors_InitPressure() {
                                 Adafruit_BMP280::SAMPLING_X2,
                                 Adafruit_BMP280::SAMPLING_X16,
                                 Adafruit_BMP280::FILTER_X4,
-                                Adafruit_BMP280::STANDBY_MS_1);
+                                Adafruit_BMP280::STANDBY_MS_63);
     }
     if (_bmpAirwayOk) {
         _bmpAirway.setSampling(Adafruit_BMP280::MODE_NORMAL,
                                Adafruit_BMP280::SAMPLING_X2,
                                Adafruit_BMP280::SAMPLING_X16,
                                Adafruit_BMP280::FILTER_X4,
-                               Adafruit_BMP280::STANDBY_MS_1);
+                               Adafruit_BMP280::STANDBY_MS_63);
     }
 
     if (_bmpAmbientOk && _bmpAirwayOk) {

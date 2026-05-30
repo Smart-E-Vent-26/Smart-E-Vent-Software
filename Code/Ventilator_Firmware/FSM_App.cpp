@@ -30,7 +30,7 @@
 #define DEFAULT_IE_RATIO            2.0f      // 1:2
 #define DEFAULT_TIDAL_ML            400.0f    // 400 mL
 #define DEFAULT_TARGET_PIP_KPA      2.5f      // ~25 cmH2O
-#define SENSOR_POLL_INTERVAL_MS     10        // 100 Hz (fast polling to catch pressure spikes in PCV)
+#define SENSOR_POLL_INTERVAL_MS     40        // ~25 Hz (matches test code 40ms window)
 #define TELEMETRY_PRINT_INTERVAL_MS 250       // Print to Serial every 250ms
 
 // =============================================================
@@ -275,9 +275,9 @@ void FSM_Update() {
         if (_mode == MODE_PCV) {
             float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
             
-            // Proportional "Soft Landing" ramp: start slowing down 1.0 kPa (10 cmH2O) before target
-            if (pressureError < 1.0f && pressureError > 0.0f) { 
-                float speedFactor = max(0.1f, pressureError / 1.0f); 
+            // Proportional "Soft Landing" ramp
+            if (pressureError < 0.5f && pressureError > 0.0f) { 
+                float speedFactor = max(0.1f, pressureError / 0.5f); 
                 Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor)); 
             }
             
