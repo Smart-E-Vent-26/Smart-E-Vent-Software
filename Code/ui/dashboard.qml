@@ -436,6 +436,7 @@ ApplicationWindow {
     // --- Virtual Touchscreen Keyboard ---
     InputPanel {
         id: inputPanel
+        parent: Overlay.overlay
         z: 9999
         y: Qt.inputMethod.visible ? parent.height - height : parent.height
         anchors.left: parent.left
