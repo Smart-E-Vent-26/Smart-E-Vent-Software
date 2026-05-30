@@ -7,7 +7,6 @@ import serial.tools.list_ports
 import csv
 from collections import deque
 
-os.environ["QT_IM_MODULE"] = "none" 
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication
@@ -148,6 +147,11 @@ class VentilatorCore(QObject):
     def emergencyStop(self): self.send_command("E")
     @Slot()
     def calibrateHome(self): self.send_command("H")
+    @Slot()
+    def exitApp(self): 
+        print("[SYSTEM] Exiting UI from Kiosk button.")
+        self.shutdown()
+        QApplication.quit()
 
     # --- Properties and Serial Translation ---
     @Property(str, notify=mode_changed)

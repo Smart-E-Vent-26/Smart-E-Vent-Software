@@ -12,6 +12,19 @@ ApplicationWindow {
     title: "BVM Emergency Ventilator"
     color: "#121212" 
 
+    // --- Floating Exit Button ---
+    Button {
+        text: "✕ EXIT"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 10
+        width: 80
+        height: 35
+        background: Rectangle { color: "#333"; radius: 5; border.color: "#555" }
+        contentItem: Text { text: parent.text; color: "#aaa"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        onClicked: VentCore.exitApp()
+    }
+
     // --- Dynamic Settings Pop-up ---
     Popup {
         id: editPopup

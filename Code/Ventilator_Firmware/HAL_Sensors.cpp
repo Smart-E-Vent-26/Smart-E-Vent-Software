@@ -93,21 +93,11 @@ bool HAL_Sensors_InitPressure() {
 // Returns (airway - ambient) in kPa
 // =============================================================
 float HAL_Sensors_ReadPressureKpa() {
-    static float lastGoodKpa = 0.0f;
-
     if (_bmpAmbientOk && _bmpAirwayOk) {
         float pAirway  = _bmpAirway.readPressure();     // Pa
         float pAmbient = _bmpAmbient.readPressure();    // Pa
         float currentKpa = ((pAirway - pAmbient) / 1000.0f) - _pressureOffsetKpa; // kPa
-
-        // --- SOFTWARE EMI SHIELD ---
-        // 8.0 kPa is ~81 cmH2O. Human lungs pop at 40 cmH2O. 
-        // Anything above 8.0 or below -2.0 is a physically impossible ghost spike.
-        if (currentKpa > 8.0f || currentKpa < -2.0f) {
-            return lastGoodKpa; // Ignore the EMI noise, return the last safe reading!
-        }
         
-        lastGoodKpa = currentKpa; 
         return currentKpa;
     }
     return 0.0f;
