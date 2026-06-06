@@ -1,6 +1,10 @@
 // ===========================================================
 // HAL_Board.h — Hardware Abstraction Layer: Board & Pin Defs
 // Smart E-Ventilator Firmware v2.0
+//
+// FIX v2.0:
+//   - Added missing declarations for HAL_Board_ReadStartStopBtn()
+//     and HAL_Board_ReadEStopBtn() (were wrongly placed in HAL_Motor.h)
 // ===========================================================
 #ifndef HAL_BOARD_H
 #define HAL_BOARD_H
@@ -45,8 +49,8 @@
 #define MECH_FULL_COMPRESS_TURNS    (MECH_FULL_COMPRESS_STEPS / (float)MOTOR_PULSES_PER_REV)
 
 // Volume ↔ Steps calibration (1300 steps = 600 mL)
-const float MECH_STEPS_PER_ML          = 2.166667f;
-const float MECH_MAX_TV_ML             = 600.0f;
+const float MECH_STEPS_PER_ML           = 2.166667f;
+const float MECH_MAX_TV_ML              = 600.0f;
 const float MECH_INHALE_MOTION_FRACTION = 0.8f;   // 80% compression, 20% hold
 
 // =============================================================
@@ -62,5 +66,12 @@ void HAL_Board_Init();
 void HAL_WDT_Enable();
 void HAL_WDT_Reset();
 void HAL_WDT_Disable();
+
+// =============================================================
+// BUTTON READS
+// (Definitions live in HAL_Board.cpp)
+// =============================================================
+bool HAL_Board_ReadStartStopBtn();
+bool HAL_Board_ReadEStopBtn();
 
 #endif // HAL_BOARD_H

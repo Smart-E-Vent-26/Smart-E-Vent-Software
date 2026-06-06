@@ -35,6 +35,7 @@
 #include "Filters.h"
 #include "Safety.h"
 #include "FSM_App.h"
+#include <avr/wdt.h>
 
 // =============================================================
 // LOCAL SETTING MIRRORS  (for serial display / adjustment)
@@ -189,6 +190,12 @@ static void _processSerialCommand() {
                                      F("[CMD] Graph mode OFF (text telemetry)"));
             break;
         }
+        case 'W':
+            Serial.println(F("[SYS] Software Reboot Requested via GUI..."));
+            delay(100);
+            wdt_enable(WDTO_15MS); // Arm the watchdog
+            while(1) {}            // Trap processor to force reboot
+            break;
 
         // --- BPM quick adjust ---
         case '+':
