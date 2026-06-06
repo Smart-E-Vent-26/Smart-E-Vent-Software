@@ -255,7 +255,25 @@ ApplicationWindow {
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.emergencyStop() 
                 }
-
+Button { 
+                    text: "HARDWARE REBOOT"
+                    Layout.fillWidth: true
+                    background: Rectangle { 
+                        color: "#8E24AA" // The purple color you used previously
+                        radius: 5 
+                    }
+                    contentItem: Text { 
+                        text: parent.text
+                        color: "white"
+                        font.bold: true
+                        font.pixelSize: 16
+                        horizontalAlignment: Text.AlignHCenter 
+                    }
+                    onClicked: {
+                        console.log("[UI] Hardware Reboot Button Clicked")
+                        VentCore.rebootSystem() 
+                    }
+                }
                 Button { 
                     text: "HOME CALIBRATE"; Layout.fillWidth: true; background: Rectangle { color: "#1565C0"; radius: 5 }
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }

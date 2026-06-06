@@ -151,6 +151,21 @@ class VentilatorCore(QObject):
     @Slot()
     def calibrateHome(self): self.send_command("H")
     @Slot()
+    def rebootSystem(self): 
+        print("[EMERGENCY] Initiating full system hardware reboot...")
+        
+        # 1. Send the 'Z' command to force the microcontroller to reset
+        self.send_command("Z")
+        
+        # 2. Give the serial bus a tiny fraction of a second to flush the Tx buffer
+        time.sleep(0.1) 
+        
+        # 3. Gracefully shutdown the serial thread to prevent port corruption
+        self.shutdown()
+        
+        # 4. Command the host OS to reboot immediately
+        os.system("sudo reboot")
+    @Slot()
     def rebootSystem(self): self.send_command("R")
     @Slot()
     def exitApp(self): 
