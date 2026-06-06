@@ -140,22 +140,31 @@ class VentilatorCore(QObject):
     def send_command(self, cmd):
         if self.reader:
             self.reader.send_cmd(cmd)
-
-    # --- System Control Slots ---
+# --- System Control Slots ---
     @Slot()
     def startVentilation(self): self.send_command("S")
+    
     @Slot()
     def stopVentilation(self): self.send_command("X")
+    
     @Slot()
     def emergencyStop(self): self.send_command("E")
+    
     @Slot()
     def calibrateHome(self): self.send_command("H")
+    
+    # NEW: Software Reboot Command
+    @Slot()
+    def rebootSystem(self): 
+        print("[SYSTEM] Sending Reboot Command to Arduino...")
+        self.send_command("W")
+        
     @Slot()
     def exitApp(self): 
         print("[SYSTEM] Exiting UI from Kiosk button.")
         self.shutdown()
         os._exit(0)
-
+    
     # --- Properties and Serial Translation ---
     @Property(str, notify=mode_changed)
     def mode(self): return self._mode

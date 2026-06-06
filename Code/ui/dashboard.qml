@@ -261,6 +261,13 @@ ApplicationWindow {
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.calibrateHome() 
                 }
+                // ---REBOOT BUTTON ---
+                Button { 
+                    text: "REBOOT SYSTEM"; Layout.fillWidth: true; background: Rectangle { color: "#8E24AA"; radius: 5 } // Purple color
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: VentCore.rebootSystem() 
+                }
+                // -------------------------
 
                 Button {
                     text: "DATA LOGGING SETTINGS"
