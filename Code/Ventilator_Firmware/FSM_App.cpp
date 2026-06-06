@@ -11,9 +11,6 @@
 #include "Safety.h"
 #include <avr/wdt.h>
 
-// =============================================================
-// COMPILE-TIME DEFAULTS
-// =============================================================
 #define DEFAULT_BPM                 15
 #define DEFAULT_IE_RATIO            2.0f      // 1:2
 #define DEFAULT_TIDAL_ML            400.0f    // 400 mL
@@ -21,9 +18,6 @@
 #define SENSOR_POLL_INTERVAL_MS     40        // ~25 Hz
 #define TELEMETRY_PRINT_INTERVAL_MS 250       // Print to Serial every 250ms
 
-// =============================================================
-// PRIVATE STATE
-// =============================================================
 static VentState    _state            = STATE_BOOT;
 static VentMode     _mode             = MODE_VCV;
 static VentSettings _settings;
@@ -47,9 +41,6 @@ static uint32_t _pauseDurationMs    = 0;
 static bool     _graphMode          = false;
 static bool     _calibRetracting    = false;
 
-// =============================================================
-// FORWARD DECLARATIONS
-// =============================================================
 static void _startInhale();
 
 static void _computeBreathTiming() {
@@ -64,14 +55,10 @@ static void _updateKinematics() {
     _computeBreathTiming();
 }
 
-// =============================================================
-// HELPER: Handles transition at the end of a full breath cycle
-// =============================================================
 static void _finishBreath(bool patientTriggered = false) {
     if (_stopRequested) {
         _stopRequested = false;
         
-        // INSTANT HOMING: If already on the Hall sensor, stop instantly!
         if (HAL_Sensors_IsHallTriggered()) {
             if (!_graphMode) Serial.println(F("========== VENTILATION STOPPING: ALREADY AT HOME ==========\n"));
             HAL_Motor_Disable();
@@ -79,7 +66,6 @@ static void _finishBreath(bool patientTriggered = false) {
             _state = STATE_READY;
             _stateEntryMs = HAL_GetMillis();
         } else {
-            // Fallback: If we missed it, do the standard slow homing routine
             if (!_graphMode) Serial.println(F("========== VENTILATION STOPPING: RETRACTING TO HOME ==========\n"));
             _state        = STATE_SOFT_STOP_WAIT;
             _stateEntryMs = HAL_GetMillis();
@@ -95,9 +81,6 @@ static void _finishBreath(bool patientTriggered = false) {
     }
 }
 
-// =============================================================
-// HELPER: begin a new inhale phase
-// =============================================================
 static void _startInhale() {
     _stateEntryMs    = HAL_GetMillis();
     _peakPressureKpa = 0.0f;
@@ -133,9 +116,6 @@ static void _startInhale() {
     }
 }
 
-// =============================================================
-// FSM_Init
-// =============================================================
 void FSM_Init() {
     _state = STATE_BOOT;
     _mode  = MODE_VCV;
@@ -155,9 +135,6 @@ void FSM_Init() {
     Serial.println(F("[FSM] Waiting for homing command (H)..."));
 }
 
-// =============================================================
-// FSM_Update
-// =============================================================
 void FSM_Update() {
     uint32_t now = HAL_GetMillis();
 
@@ -193,11 +170,11 @@ void FSM_Update() {
     if (currentRockerState != lastRockerState && (now - lastRockerChangeMs > 250)) {
         lastRockerChangeMs = now;
 
-        if (currentRockerState == true) { // Rocker flipped to ON
+        if (currentRockerState == true) { 
             if (_state == STATE_READY) {
                 FSM_StartVentilation();
             }
-        } else { // Rocker flipped to OFF
+        } else { 
             if (_state == STATE_INHALE || _state == STATE_HOLD ||
                 _state == STATE_EXHALE || _state == STATE_PAUSE) {
                 _stopRequested = true;
@@ -222,12 +199,13 @@ void FSM_Update() {
         Safety_Update(_currentPressureKpa);
     }
 
-    // ---- Telemetry print (Continuous Stream for UI) ----
-    if ((now - _lastTelemetryMs) >= TELEMETRY_PRINT_INTERVAL_MS) {
+    // ---- Telemetry print (MATCHES OLD FILE EXACTLY) ----
+    if ((_state == STATE_INHALE || _state == STATE_HOLD ||
+         _state == STATE_EXHALE || _state == STATE_PAUSE) &&
+        (now - _lastTelemetryMs) >= TELEMETRY_PRINT_INTERVAL_MS) {
         _lastTelemetryMs = now;
 
-        bool  isExhalePhase   = (_state == STATE_EXHALE || _state == STATE_PAUSE ||
-                                 _state == STATE_SOFT_STOP_WAIT || _state == STATE_RETRACT_HOME);
+        bool  isExhalePhase   = (_state == STATE_EXHALE || _state == STATE_PAUSE);
         float calcFlow        = Kin_GetInstantaneousFlowLPM(isExhalePhase);
         float pressureCmH2O   = _currentPressureKpa * 10.1972f;
 
@@ -242,16 +220,10 @@ void FSM_Update() {
         } else {
             const char* phaseLabel;
             switch (_state) {
-                case STATE_BOOT:           phaseLabel = "BOT"; break;
-                case STATE_CALIBRATE:      phaseLabel = "CAL"; break;
-                case STATE_READY:          phaseLabel = "RDY"; break;
                 case STATE_INHALE:         phaseLabel = "INH"; break;
                 case STATE_HOLD:           phaseLabel = "HLD"; break;
                 case STATE_EXHALE:         phaseLabel = "EXH"; break;
                 case STATE_PAUSE:          phaseLabel = "PAU"; break;
-                case STATE_SOFT_STOP_WAIT: phaseLabel = "S_W"; break;
-                case STATE_RETRACT_HOME:   phaseLabel = "S_R"; break;
-                case STATE_FAULT:          phaseLabel = "FLT"; break;
                 default:                   phaseLabel = "???"; break;
             }
             Serial.print(F("  "));           Serial.print(phaseLabel);
@@ -273,7 +245,7 @@ void FSM_Update() {
         _state        = STATE_FAULT;
         _stateEntryMs = now;
         Serial.println(F("[FSM] FAULT detected — motor disabled."));
-        // 'return;' commented out here intentionally so telemetry continues flowing to the UI
+        return; 
     }
 
     // ---- State machine ----
@@ -312,8 +284,9 @@ void FSM_Update() {
     case STATE_INHALE: {
         Kin_Update();
 
-        if (_currentPressureKpa > _peakPressureKpa)
+        if (_currentPressureKpa > _peakPressureKpa) {
             _peakPressureKpa = _currentPressureKpa;
+        }
 
         if (_mode == MODE_PCV) {
             float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
@@ -321,23 +294,20 @@ void FSM_Update() {
                 float speedFactor = max(0.1f, pressureError / 0.5f);
                 Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor));
             }
-            if (_currentPressureKpa >= _settings.targetPIP_kPa)
+            if (_currentPressureKpa >= _settings.targetPIP_kPa) {
                 Kin_Stop();
+            }
         }
 
         uint32_t elapsed = now - _stateEntryMs;
         if (Kin_IsComplete() || elapsed >= _inhaleTimeMs) {
             _currentInhaleSteps = Kin_GetStepsCompleted();
 
-            // =========================================================
-            // NOTE: DISCONNECT ALARM HAS BEEN DISABLED FOR DESK TESTING
-            // =========================================================
-            /*
+            // PATIENT DISCONNECT ALARM RESTORED (Matches old file)
             if (_peakPressureKpa < 0.5f) {
                 Safety_SetFault(FAULT_DISCONNECT);
                 Serial.println(F("[FSM] FAULT: Patient Disconnected! (Peak PIP < 5 cmH2O)"));
             }
-            */
 
             int32_t holdMs = (int32_t)_inhaleTimeMs - (int32_t)elapsed;
             _holdDurationMs = (holdMs > 10) ? (uint32_t)holdMs : 0;

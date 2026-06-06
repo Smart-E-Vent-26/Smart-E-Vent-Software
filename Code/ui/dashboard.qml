@@ -386,3 +386,35 @@ ApplicationWindow {
                     from: 1000
                     to: 1000000
                     stepSize: 100
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: VentCore
+        function onTelemetry_updated(time, pressure, volume, flow, calc_flow) {
+            pressureSeries.append(time, pressure)
+            volumeSeries.append(time, volume)
+            flowSeries.append(time, flow)
+            calcFlowSeries.append(time, calc_flow)
+
+            if (time > 15) {
+                axisX_P.min = time - 15; axisX_P.max = time;
+                axisX_V.min = time - 15; axisX_V.max = time;
+                axisX_F.min = time - 15; axisX_F.max = time;
+                
+                if (pressureSeries.count > 300) {
+                    pressureSeries.remove(0)
+                    volumeSeries.remove(0)
+                    flowSeries.remove(0)
+                    calcFlowSeries.remove(0)
+                }
+            }
+        }
+        function onPatient_state_updated(label, color, conf, p_norm, p_obs, p_rest) {
+            mlStatus.text = "ML Analysis: " + label
+            mlStatus.color = color
+        }
+    }
+}
