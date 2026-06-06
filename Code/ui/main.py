@@ -1,720 +1,395 @@
-"""
-BVM Ventilator - Patient State Display
-PyQt6/PySide6 Application with ML Classifier Integration
-
-Structure:
-    root/
-    ├── ui/
-    │   ├── main.py (this file)
-    │   └── PatientState.qml
-    └── ML/
-        ├── ml_classifier.py
-        └── weights/
-            └── *.pkl
-"""
-
-import sys
 import os
-import json
+import sys
+import time
+import re
+import serial
+import serial.tools.list_ports
+import csv
 import pickle
 import numpy as np
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, Any, Optional
-import threading
-import time
+from collections import deque
 
-# Qt imports
-try:
-    from PyQt6.QtWidgets import QApplication, QMainWindow
-    from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterType
-    from PyQt6.QtCore import QUrl, QObject, pyqtSignal, pyqtSlot, QTimer, QThread
-    from PyQt6.QtGui import QIcon
-    QT_VERSION = 6
-except ImportError:
-    from PySide6.QtWidgets import QApplication, QMainWindow
-    from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
-    from PySide6.QtCore import QUrl, QObject, Signal as pyqtSignal, Slot as pyqtSlot, QTimer, QThread
-    from PySide6.QtGui import QIcon
-    QT_VERSION = 6
+# Enable the built-in Qt On-Screen Virtual Keyboard for touchscreens
+os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
 
-# Add ML module to path
-ML_PATH = os.path.join(os.path.dirname(__file__), '..', 'ML')
-UI_PATH = os.path.dirname(__file__)
-ROOT_PATH = os.path.dirname(UI_PATH)
+from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer, Qt
+from PySide6.QtWidgets import QApplication
+from PySide6.QtQml import QQmlApplicationEngine
 
-if ML_PATH not in sys.path:
-    sys.path.insert(0, ML_PATH)
+# ── Import feature extractor from the ML sub-package ─────────────────────────
+# Layout:  <project_root>/ML/pressure_classifier.py
+#          <project_root>/ML/weights/pressure_models.pkl
+_THIS_DIR    = os.path.dirname(os.path.abspath(__file__))
+_ML_DIR      = os.path.join(_THIS_DIR,"..", "ML")
+sys.path.insert(0, _ML_DIR)
+from pressure_classifier import extract_pressure_features   # pure function, no side-effects
 
-# Import ML classifier
-try:
-    from ml_classifier import MLClassifier
-except ImportError:
-    print(f"Error: Could not import MLClassifier from {ML_PATH}")
-    print(f"Make sure ml_classifier.py exists in {ML_PATH}")
-    sys.exit(1)
+WEIGHTS_PATH = os.path.join(_ML_DIR, "weights", "pressure_models.pkl")
 
-# ============================================================================
-# PATIENT STATE MODEL
-# ============================================================================
+# ── Breath segmentation constants (must match training) ───────────────────────
+VOL_RESET_THR = 5.0     # mL     — volume below this marks a breath boundary
+SPIKE_THR     = 100.0   # cmH2O  — reject breath if |P| exceeds this
+MIN_SEG_LEN   = 6       # samples — discard shorter segments
+N_VOTE        = 3       # rolling majority-vote window (breaths)
 
-class PatientState(QObject):
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ML CLASSIFIER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class MLClassifier(QObject):
     """
-    Manages patient state and communicates with QML
-    
-    Signals:
-    --------
-    stateChanged: Emitted when patient state is updated
-    diseaseTypeChanged: Emitted when disease type is determined
-    confidenceChanged: Emitted when confidence score updates
-    waveformDataChanged: Emitted when waveform data is available
-    statusChanged: Emitted when status message changes
-    """
-    
-    stateChanged = pyqtSignal(str)
-    diseaseTypeChanged = pyqtSignal(str)
-    confidenceChanged = pyqtSignal(float)
-    probabilitiesChanged = pyqtSignal(str)  # JSON string of probabilities
-    waveformDataChanged = pyqtSignal(str)   # JSON string of waveform data
-    statusChanged = pyqtSignal(str)
-    classificationTimingChanged = pyqtSignal(str)
-    
-    def __init__(self, ml_classifier: 'MLClassifier'):
-        """
-        Initialize patient state manager
-        
-        Parameters
-        ----------
-        ml_classifier : MLClassifier
-            The ML classifier instance
-        """
-        super().__init__()
-        
-        self.classifier = ml_classifier
-        self.current_state = "STANDBY"
-        self.current_disease = "Unknown"
-        self.current_confidence = 0.0
-        self.current_probabilities = {}
-        self.waveform_data = {}
-        self.last_update_time = None
-        self.classification_time = 0.0
-        
-        # Waveform buffer for display
-        self.pressure_buffer = []
-        self.flow_buffer = []
-        self.volume_buffer = []
-        self.max_buffer_size = 1000  # ~1 second at 1kHz
-        
-    @pyqtSlot(str)
-    def updateState(self, state: str):
-        """Update patient state"""
-        self.current_state = state
-        self.stateChanged.emit(state)
-        self.statusChanged.emit(f"State: {state}")
-    
-    @pyqtSlot(str, list)
-    def classifyPatientFeatures(self, patient_id: str, features: list):
-        """
-        Classify patient based on extracted features
-        
-        Parameters
-        ----------
-        patient_id : str
-            Patient identifier
-        features : list
-            Extracted features from waveforms
-        """
-        try:
-            self.updateState("CLASSIFYING")
-            self.statusChanged.emit("Running classification...")
-            
-            # Measure classification time
-            start_time = time.time()
-            
-            # Convert features to numpy array
-            features_array = np.array(features, dtype=np.float32)
-            
-            # Run classification
-            disease_type, confidence, probabilities = self.classifier.predict(features_array)
-            
-            # Calculate classification time
-            self.classification_time = time.time() - start_time
-            
-            # Update state
-            self.current_disease = disease_type
-            self.current_confidence = float(confidence)
-            self.current_probabilities = probabilities
-            self.last_update_time = datetime.now()
-            
-            # Emit signals
-            self.diseaseTypeChanged.emit(disease_type)
-            self.confidenceChanged.emit(confidence)
-            self.probabilitiesChanged.emit(json.dumps(probabilities))
-            self.classificationTimingChanged.emit(f"{self.classification_time*1000:.2f} ms")
-            
-            # Update state to classified
-            self.updateState("CLASSIFIED")
-            self.statusChanged.emit(f"✓ {disease_type} (Confidence: {confidence*100:.1f}%)")
-            
-        except Exception as e:
-            self.updateState("ERROR")
-            self.statusChanged.emit(f"Error: {str(e)}")
-    
-    @pyqtSlot(list, list, list)
-    def updateWaveforms(self, pressure: list, flow: list, volume: list):
-        """
-        Update waveform data
-        
-        Parameters
-        ----------
-        pressure : list
-            Pressure waveform data
-        flow : list
-            Flow waveform data
-        volume : list
-            Volume waveform data
-        """
-        try:
-            self.pressure_buffer.extend(pressure)
-            self.flow_buffer.extend(flow)
-            self.volume_buffer.extend(volume)
-            
-            # Keep only recent data
-            if len(self.pressure_buffer) > self.max_buffer_size:
-                self.pressure_buffer = self.pressure_buffer[-self.max_buffer_size:]
-                self.flow_buffer = self.flow_buffer[-self.max_buffer_size:]
-                self.volume_buffer = self.volume_buffer[-self.max_buffer_size:]
-            
-            # Emit waveform data
-            waveform_json = json.dumps({
-                'pressure': self.pressure_buffer[-100:],  # Send last 100 points
-                'flow': self.flow_buffer[-100:],
-                'volume': self.volume_buffer[-100:]
-            })
-            self.waveformDataChanged.emit(waveform_json)
-            
-        except Exception as e:
-            print(f"Error updating waveforms: {e}")
-    
-    @pyqtSlot(result=str)
-    def getStateString(self) -> str:
-        """Get current state as formatted string"""
-        return f"State: {self.current_state}\nDisease: {self.current_disease}\nConfidence: {self.current_confidence*100:.1f}%"
-    
-    @pyqtSlot(result=str)
-    def getDiseaseType(self) -> str:
-        """Get current disease type"""
-        return self.current_disease
-    
-    @pyqtSlot(result=float)
-    def getConfidence(self) -> float:
-        """Get current confidence score"""
-        return self.current_confidence
-    
-    @pyqtSlot(result=str)
-    def getProbabilities(self) -> str:
-        """Get probabilities as JSON string"""
-        return json.dumps(self.current_probabilities)
-    
-    @pyqtSlot(result=str)
-    def getDetailedReport(self) -> str:
-        """Get detailed classification report"""
-        report = {
-            'timestamp': self.last_update_time.isoformat() if self.last_update_time else None,
-            'state': self.current_state,
-            'disease_type': self.current_disease,
-            'confidence': self.current_confidence,
-            'probabilities': self.current_probabilities,
-            'classification_time_ms': self.classification_time * 1000
-        }
-        return json.dumps(report, indent=2)
+    Accumulates live pressure + volume samples, detects each complete breath
+    cycle via the Volume-reset boundary, extracts the same 20 pressure features
+    used during training, runs the Random Forest pipeline, and emits the result.
 
-# ============================================================================
-# ML CLASSIFIER WRAPPER
-# ============================================================================
-
-class MLClassifierThread(QThread):
-    """
-    Run ML classifier in separate thread to avoid UI blocking
-    
     Signals
-    -------
-    classificationDone : Emitted when classification is complete
+    ───────
+    prediction_ready(label:str, color:str, confidence:float,
+                     prob_normal:float, prob_obstr:float, prob_restr:float)
     """
-    
-    classificationDone = pyqtSignal(str, float, dict)  # disease_type, confidence, probabilities
-    error = pyqtSignal(str)
-    
-    def __init__(self, classifier: 'MLClassifier'):
+
+    prediction_ready = Signal(str, str, float, float, float, float)
+
+    _COLORS = {
+        "Normal":      "#2ecc71",
+        "Obstructive": "#e74c3c",
+        "Restrictive": "#3498db",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._model        = None
+        self._le           = None
+        self._feat_cols    = None
+        self._ready        = False
+        self._vote_buf     = deque(maxlen=N_VOTE)
+        self._breath_count = 0
+        self._pres_buf     = []
+        self._in_breath    = False
+        self._load_weights()
+
+    def _load_weights(self):
+        if not os.path.exists(WEIGHTS_PATH):
+            print(f"[ML] Weights not found: {WEIGHTS_PATH}")
+            return
+        try:
+            with open(WEIGHTS_PATH, "rb") as f:
+                w = pickle.load(f)
+            self._model     = w["models"][w["best_model"]]
+            self._le        = w["label_encoder"]
+            self._feat_cols = w["feature_cols"]
+            self._ready     = True
+            print(f"[ML] Loaded '{w['best_model']}' — "
+                  f"classes: {list(self._le.classes_)}, "
+                  f"features: {len(self._feat_cols)}")
+        except Exception as e:
+            print(f"[ML] Failed to load weights: {e}")
+
+    def push_sample(self, pressure: float, volume: float):
+        """Feed one telemetry sample. Called on the main thread — very fast."""
+        if not self._ready:
+            return
+
+        if volume > VOL_RESET_THR:
+            self._in_breath = True
+            self._pres_buf.append(pressure)
+        elif self._in_breath:
+            # Volume just reset → breath is complete
+            self._in_breath = False
+            self._classify_breath()
+            self._pres_buf = []
+
+    def _classify_breath(self):
+        pres = np.array(self._pres_buf, dtype=float)
+
+        if len(pres) < MIN_SEG_LEN:
+            return
+        if pres.max() > SPIKE_THR or pres.min() < -SPIKE_THR:
+            print(f"[ML] Spike rejected (max={pres.max():.1f} cmH2O)")
+            return
+
+        try:
+            feats = extract_pressure_features(pres)
+            X     = np.array([[feats[c] for c in self._feat_cols]])
+        except Exception as e:
+            print(f"[ML] Feature extraction error: {e}")
+            return
+
+        try:
+            enc        = self._model.predict(X)[0]
+            proba      = self._model.predict_proba(X)[0]
+            raw_label  = self._le.inverse_transform([enc])[0]
+            confidence = float(proba[enc])
+        except Exception as e:
+            print(f"[ML] Inference error: {e}")
+            return
+
+        # Rolling majority vote for stability across noisy breaths
+        self._vote_buf.append(raw_label)
+        voted_label = raw_label
+        if len(self._vote_buf) == N_VOTE:
+            from collections import Counter
+            voted_label = Counter(self._vote_buf).most_common(1)[0][0]
+
+        self._breath_count += 1
+        color   = self._COLORS.get(voted_label, "#ffcc00")
+        classes = list(self._le.classes_)
+        def _p(cls): return float(proba[classes.index(cls)]) if cls in classes else 0.0
+
+        print(f"[ML] Breath #{self._breath_count}: {voted_label} "
+              f"({confidence*100:.1f}%)  vote={list(self._vote_buf)}")
+
+        self.prediction_ready.emit(
+            voted_label, color, confidence,
+            _p("Normal"), _p("Obstructive"), _p("Restrictive"),
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SERIAL READER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class SerialReader(QThread):
+    """Background thread to read Arduino telemetry without blocking the UI."""
+    new_data = Signal(float, float, float, float, float)  # t, pressure, volume, flow, calc_flow
+
+    def __init__(self, port):
         super().__init__()
-        self.classifier = classifier
-        self.features = None
-    
-    def setFeatures(self, features: np.ndarray):
-        """Set features to classify"""
-        self.features = features
-    
+        self.port       = port
+        self.running    = True
+        self.start_time = time.time()
+        self.re_flow      = re.compile(r'Flow=([-\d.]+)')
+        self.re_calc_flow = re.compile(r'CalcFlow=([-\d.]+)')
+        self.re_vol       = re.compile(r'Vol=([-\d.]+)')
+        self.re_pressure  = re.compile(r'Pressure=([-\d.]+)')
+
     def run(self):
-        """Run classification in thread"""
         try:
-            if self.features is None:
-                self.error.emit("No features provided")
-                return
-            
-            disease_type, confidence, probabilities = self.classifier.predict(self.features)
-            self.classificationDone.emit(disease_type, float(confidence), probabilities)
-            
+            self.arduino = serial.Serial(self.port, 115200,
+                                         timeout=0.1, write_timeout=0.2)
+            time.sleep(2)
+            self.arduino.reset_input_buffer()
+            print(f"[SYSTEM] Live Telemetry Thread linked to {self.port}")
         except Exception as e:
-            self.error.emit(f"Classification error: {str(e)}")
+            print(f"[ERROR] Serial open failed: {e}")
+            return
 
-# ============================================================================
-# MAIN APPLICATION WINDOW
-# ============================================================================
+        while self.running and self.arduino.is_open:
+            try:
+                if self.arduino.in_waiting:
+                    line = self.arduino.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        f_match  = self.re_flow.search(line)
+                        cf_match = self.re_calc_flow.search(line)
+                        v_match  = self.re_vol.search(line)
+                        p_match  = self.re_pressure.search(line)
+                        if f_match and v_match:
+                            flow      = float(f_match.group(1))
+                            calc_flow = float(cf_match.group(1)) if cf_match else 0.0
+                            vol       = float(v_match.group(1))
+                            pressure  = float(p_match.group(1)) if p_match else 0.0
+                            t         = time.time() - self.start_time
+                            self.new_data.emit(t, pressure, vol, flow, calc_flow)
+            except Exception:
+                pass
+            time.sleep(0.005)
 
-class BVMApplication(QMainWindow):
-    """
-    Main application window for BVM Ventilator Patient State Display
-    """
-    
-    def __init__(self, app: QApplication):
+    def send_cmd(self, cmd_string):
+        if hasattr(self, 'arduino') and self.arduino and self.arduino.is_open:
+            try:
+                print(f"Serial Tx -> {cmd_string}")
+                self.arduino.write((cmd_string + "\n").encode('utf-8'))
+            except serial.SerialTimeoutException:
+                print("[WARNING] Arduino busy! Dropped command.")
+            except Exception as e:
+                print(f"[ERROR] Tx Failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VENTILATOR CORE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class VentilatorCore(QObject):
+
+    # Raw telemetry for charts
+    telemetry_updated = Signal(float, float, float, float, float)
+
+    # ML result — consumed by the QML diagnostic panel
+    # Args: label, hex_color, confidence, prob_normal, prob_obstr, prob_restr
+    ml_prediction_updated = Signal(str, str, float, float, float, float)
+
+    rr_changed           = Signal()
+    tidal_volume_changed = Signal()
+    mode_changed         = Signal()
+    ie_ratio_changed     = Signal()
+    target_pip_changed   = Signal()
+    is_logging_changed   = Signal()
+    log_filename_changed = Signal()
+    log_limit_changed    = Signal()
+
+    def __init__(self):
         super().__init__()
-        
-        self.app = app
-        self.qml_engine = None
-        self.patient_state = None
-        self.classifier = None
-        self.classifier_thread = None
-        
-        # Initialize
-        self.init_classifier()
-        self.init_ui()
-        
-    def init_classifier(self):
-        """Initialize ML classifier"""
+        self._rr           = 15
+        self._tidal_volume = 400
+        self._mode         = "VCV"
+        self._ie_ratio     = "1:2"
+        self._target_pip   = 20
+        self._is_logging   = False
+        self._log_filename = os.path.expanduser("~/vent_data.csv")
+        self._log_limit    = 10000
+        self.log_buffer    = deque(maxlen=self._log_limit)
+
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self._flush_log)
+        self.log_timer.start(5000)
+
+        # ML classifier — loads weights at startup, emits directly to QML signal
+        self.classifier = MLClassifier(self)
+        self.classifier.prediction_ready.connect(self.ml_prediction_updated)
+
+        self.reader = None
+        self.connect_arduino()
+
+    def connect_arduino(self):
+        ports = list(serial.tools.list_ports.comports())
+        for p in ports:
+            if "Arduino" in p.description or "ttyACM" in p.device:
+                self.reader = SerialReader(p.device)
+                self.reader.new_data.connect(self._on_telemetry_updated)
+                self.reader.start()
+                return
+        print("[SYSTEM] No Arduino found.")
+
+    def _on_telemetry_updated(self, t, pressure, volume, flow, calc_flow):
+        self.telemetry_updated.emit(t, pressure, volume, flow, calc_flow)
+        self.classifier.push_sample(pressure, volume)          # ← ML inference
+        if self._is_logging:
+            self.log_buffer.append([t, pressure, volume, flow, calc_flow,
+                                     self._mode, self._rr, self._tidal_volume,
+                                     self._ie_ratio, self._target_pip])
+
+    def _flush_log(self):
+        if not self._is_logging or not self.log_buffer:
+            return
         try:
-            print(f"Loading ML classifier from {ML_PATH}...")
-            self.classifier = MLClassifier(
-                weights_dir=os.path.join(ML_PATH, 'weights')
-            )
-            print("✓ ML Classifier loaded successfully")
+            with open(self._log_filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Time", "Pressure", "Volume", "PhysicalFlow",
+                                  "CalcFlow", "Mode", "RR", "TV", "IERatio", "PIP"])
+                writer.writerows(self.log_buffer)
         except Exception as e:
-            print(f"✗ Error loading ML classifier: {e}")
-            print(f"  Weights directory: {os.path.join(ML_PATH, 'weights')}")
-            print(f"  Available files: {os.listdir(ML_PATH) if os.path.exists(ML_PATH) else 'ML_PATH not found'}")
-    
-    def init_ui(self):
-        """Initialize QML UI"""
-        try:
-            # Create QML engine
-            self.qml_engine = QQmlApplicationEngine()
-            
-            # Register Python classes to QML
-            self.patient_state = PatientState(self.classifier)
-            self.qml_engine.rootContext().setContextProperty("patientState", self.patient_state)
-            self.qml_engine.rootContext().setContextProperty("appWindow", self)
-            
-            # Load QML file
-            qml_file = os.path.join(UI_PATH, "PatientState.qml")
-            if not os.path.exists(qml_file):
-                print(f"✗ QML file not found: {qml_file}")
-                print(f"  Creating default QML file...")
-                self.create_default_qml(qml_file)
-            
-            qml_url = QUrl.fromLocalFile(os.path.abspath(qml_file))
-            self.qml_engine.load(qml_url)
-            
-            if not self.qml_engine.rootObjects():
-                print("✗ Failed to load QML file")
-                sys.exit(1)
-            
-            # Get root object
-            root = self.qml_engine.rootObjects()[0]
-            root.show()
-            self.show()
-            
-            print("✓ UI initialized successfully")
-            
-        except Exception as e:
-            print(f"✗ Error initializing UI: {e}")
-            sys.exit(1)
-    
-    def create_default_qml(self, qml_file: str):
-        """Create default QML file if it doesn't exist"""
-        default_qml = '''import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
+            print(f"[ERROR] Failed to save log: {e}")
 
-ApplicationWindow {
-    visible: true
-    width: 1200
-    height: 800
-    title: "BVM Ventilator - Patient State Display"
-    
-    color: "#1e1e1e"
-    
-    ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 20
-        spacing: 20
-        
-        // Header
-        Rectangle {
-            Layout.fillWidth: true
-            height: 60
-            color: "#2d2d2d"
-            radius: 8
-            
-            Text {
-                anchors.fill: parent
-                anchors.margins: 15
-                text: "BVM Ventilator - ML Patient Diagnosis"
-                font.pixelSize: 24
-                font.bold: true
-                color: "#00ff00"
-                verticalAlignment: Text.AlignVCenter
-            }
-        }
-        
-        // Main content
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 20
-            
-            // Left panel - Classification results
-            Rectangle {
-                Layout.fillHeight: true
-                Layout.preferredWidth: parent.width * 0.5
-                color: "#2d2d2d"
-                radius: 8
-                
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 15
-                    
-                    Text {
-                        text: "Classification Results"
-                        font.pixelSize: 18
-                        font.bold: true
-                        color: "#00ff00"
-                    }
-                    
-                    // Disease Type
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 80
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            spacing: 5
-                            
-                            Text {
-                                text: "Disease Type"
-                                font.pixelSize: 12
-                                color: "#aaaaaa"
-                            }
-                            
-                            Text {
-                                text: patientState.diseaseTypeChanged ? patientState.getDiseaseType() : "Unknown"
-                                font.pixelSize: 28
-                                font.bold: true
-                                color: getDiseaseColor(patientState.getDiseaseType())
-                            }
-                        }
-                    }
-                    
-                    // Confidence Score
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 80
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            spacing: 5
-                            
-                            Text {
-                                text: "Confidence Score"
-                                font.pixelSize: 12
-                                color: "#aaaaaa"
-                            }
-                            
-                            RowLayout {
-                                spacing: 15
-                                
-                                Text {
-                                    text: (patientState.getConfidence() * 100).toFixed(1) + "%"
-                                    font.pixelSize: 28
-                                    font.bold: true
-                                    color: getConfidenceColor(patientState.getConfidence())
-                                }
-                                
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    height: 30
-                                    color: "#1e1e1e"
-                                    radius: 4
-                                    
-                                    Rectangle {
-                                        height: parent.height
-                                        width: parent.width * patientState.getConfidence()
-                                        color: getConfidenceColor(patientState.getConfidence())
-                                        radius: 4
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // State
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 60
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            spacing: 5
-                            
-                            Text {
-                                text: "Current State"
-                                font.pixelSize: 12
-                                color: "#aaaaaa"
-                            }
-                            
-                            Text {
-                                text: patientState.stateChanged ? patientState.current_state : "STANDBY"
-                                font.pixelSize: 18
-                                font.bold: true
-                                color: "#00ff00"
-                            }
-                        }
-                    }
-                    
-                    // Probabilities
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            spacing: 10
-                            
-                            Text {
-                                text: "Disease Probabilities"
-                                font.pixelSize: 12
-                                color: "#aaaaaa"
-                            }
-                            
-                            // Disease probability items
-                            Repeater {
-                                model: ["Normal", "Obstructive", "Restrictive"]
-                                
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    height: 50
-                                    color: "#1e1e1e"
-                                    radius: 4
-                                    
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: 10
-                                        spacing: 3
-                                        
-                                        RowLayout {
-                                            spacing: 10
-                                            
-                                            Text {
-                                                text: modelData
-                                                font.pixelSize: 12
-                                                color: "#cccccc"
-                                                Layout.preferredWidth: 100
-                                            }
-                                            
-                                            Rectangle {
-                                                Layout.fillWidth: true
-                                                height: 20
-                                                color: "#3d3d3d"
-                                                radius: 3
-                                                
-                                                Rectangle {
-                                                    height: parent.height
-                                                    width: parent.width * getProbability(modelData)
-                                                    color: getDiseaseColorByName(modelData)
-                                                    radius: 3
-                                                }
-                                            }
-                                            
-                                            Text {
-                                                text: (getProbability(modelData) * 100).toFixed(1) + "%"
-                                                font.pixelSize: 11
-                                                color: "#ffffff"
-                                                Layout.preferredWidth: 50
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Right panel - Status and Waveforms
-            Rectangle {
-                Layout.fillHeight: true
-                Layout.preferredWidth: parent.width * 0.5
-                color: "#2d2d2d"
-                radius: 8
-                
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 15
-                    
-                    Text {
-                        text: "Status & Information"
-                        font.pixelSize: 18
-                        font.bold: true
-                        color: "#00ff00"
-                    }
-                    
-                    // Status message
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 60
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        Text {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            text: patientState.statusChanged ? patientState.statusChanged : "Ready"
-                            font.pixelSize: 14
-                            color: "#00ff00"
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                    
-                    // Detailed report
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        color: "#3d3d3d"
-                        radius: 4
-                        
-                        TextEdit {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            text: "Classification Report:\\n" + patientState.getDetailedReport()
-                            font.pixelSize: 10
-                            font.family: "Courier"
-                            color: "#00ff00"
-                            readOnly: true
-                            wrapMode: TextEdit.Wrap
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Footer with buttons
-        Rectangle {
-            Layout.fillWidth: true
-            height: 50
-            color: "#2d2d2d"
-            radius: 8
-            
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 10
-                
-                Button {
-                    text: "Refresh"
-                    onClicked: {
-                        // Placeholder for refresh action
-                    }
-                }
-                
-                Item { Layout.fillWidth: true }
-                
-                Text {
-                    text: "Classification time: " + (patientState.classificationTimingChanged || "0.00 ms")
-                    font.pixelSize: 12
-                    color: "#aaaaaa"
-                }
-            }
-        }
-    }
-    
-    function getDiseaseColor(disease) {
-        if (disease === "Normal") return "#00ff00"
-        if (disease === "Obstructive") return "#ffaa00"
-        if (disease === "Restrictive") return "#ff0000"
-        return "#ffffff"
-    }
-    
-    function getDiseaseColorByName(name) {
-        if (name === "Normal") return "#00ff00"
-        if (name === "Obstructive") return "#ffaa00"
-        if (name === "Restrictive") return "#ff0000"
-        return "#ffffff"
-    }
-    
-    function getConfidenceColor(confidence) {
-        if (confidence >= 0.9) return "#00ff00"
-        if (confidence >= 0.7) return "#ffaa00"
-        return "#ff0000"
-    }
-    
-    function getProbability(disease) {
-        try {
-            var probs = JSON.parse(patientState.getProbabilities())
-            if (disease === "Normal") return probs["Normal"] || 0
-            if (disease === "Obstructive") return probs["Obstructive"] || 0
-            if (disease === "Restrictive") return probs["Restrictive"] || 0
-        } catch (e) {
-            return 0
-        }
-        return 0
-    }
-}
-'''
-        
-        with open(qml_file, 'w') as f:
-            f.write(default_qml)
-        print(f"✓ Created default QML file: {qml_file}")
+    def send_command(self, cmd):
+        if self.reader:
+            self.reader.send_cmd(cmd)
 
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
+    @Slot()
+    def startVentilation(self): self.send_command("S")
+    @Slot()
+    def stopVentilation(self):  self.send_command("X")
+    @Slot()
+    def emergencyStop(self):    self.send_command("E")
+    @Slot()
+    def calibrateHome(self):    self.send_command("H")
+    @Slot()
+    def exitApp(self):
+        self.shutdown()
+        os._exit(0)
 
-def main():
-    """Main application entry point"""
-    
+    @Property(str, notify=mode_changed)
+    def mode(self): return self._mode
+    @mode.setter
+    def mode(self, value):
+        if self._mode != value:
+            self._mode = value
+            self.send_command("V" if value == "VCV" else "P")
+            self.mode_changed.emit()
+
+    @Property(int, notify=rr_changed)
+    def rr(self): return self._rr
+    @rr.setter
+    def rr(self, value):
+        if self._rr != value:
+            self._rr = value
+            self.send_command(f"B{value}")
+            self.rr_changed.emit()
+
+    @Property(int, notify=tidal_volume_changed)
+    def tidal_volume(self): return self._tidal_volume
+    @tidal_volume.setter
+    def tidal_volume(self, value):
+        if self._tidal_volume != value:
+            self._tidal_volume = value
+            self.send_command(f"T{value}")
+            self.tidal_volume_changed.emit()
+
+    @Property(str, notify=ie_ratio_changed)
+    def ie_ratio(self): return self._ie_ratio
+    @ie_ratio.setter
+    def ie_ratio(self, value):
+        if self._ie_ratio != value:
+            self._ie_ratio = value
+            self.send_command(f"R{int(value.split(':')[1]) * 10}")
+            self.ie_ratio_changed.emit()
+
+    @Property(int, notify=target_pip_changed)
+    def target_pip(self): return self._target_pip
+    @target_pip.setter
+    def target_pip(self, value):
+        if self._target_pip != value:
+            self._target_pip = value
+            self.send_command(f"I{value}")
+            self.target_pip_changed.emit()
+
+    @Property(bool, notify=is_logging_changed)
+    def is_logging(self): return self._is_logging
+    @is_logging.setter
+    def is_logging(self, value):
+        if self._is_logging != value:
+            self._is_logging = value
+            self.is_logging_changed.emit()
+            if value: print(f"[LOG] Logging to {self._log_filename}")
+
+    @Property(str, notify=log_filename_changed)
+    def log_filename(self): return self._log_filename
+    @log_filename.setter
+    def log_filename(self, value):
+        if self._log_filename != value:
+            self._log_filename = value
+            self.log_filename_changed.emit()
+
+    @Property(int, notify=log_limit_changed)
+    def log_limit(self): return self._log_limit
+    @log_limit.setter
+    def log_limit(self, value):
+        if self._log_limit != value:
+            self._log_limit = value
+            self.log_buffer = deque(self.log_buffer, maxlen=value)
+            self.log_limit_changed.emit()
+
+    def shutdown(self):
+        if self.reader:
+            self.reader.running = False
+            self.reader.wait(1000)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # Set application style
-    app.setStyle('Fusion')
-    
-    # Create main window
-    main_window = BVMApplication(app)
-    
-    # Run application
-    sys.exit(app.exec())
+    app.setOverrideCursor(Qt.BlankCursor)
+    engine = QQmlApplicationEngine()
 
-if __name__ == '__main__':
-    main()
+    vent_core = VentilatorCore()
+    engine.rootContext().setContextProperty("VentCore", vent_core)
+    app.aboutToQuit.connect(vent_core.shutdown)
+
+    qml_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.qml")
+    engine.load(qml_file)
+    if not engine.rootObjects():
+        sys.exit(-1)
+    sys.exit(app.exec())
