@@ -140,7 +140,16 @@ void FSM_Update() {
 
     // ---- Hardware Emergency Stop (NC Wiring & Auto-Reboot) ----
     static bool lastEStopPressed = false;
-    bool currentEStopPressed = HAL_Board_ReadEStopBtn();
+    static uint32_t eStopActiveMs = 0;
+    bool rawEStop = HAL_Board_ReadEStopBtn();
+
+    if (rawEStop) {
+        if (eStopActiveMs == 0) eStopActiveMs = now;
+    } else {
+        eStopActiveMs = 0;
+    }
+
+    bool currentEStopPressed = (eStopActiveMs != 0 && (now - eStopActiveMs > 50));
 
     if (currentEStopPressed) {
         if (_state != STATE_FAULT) {
