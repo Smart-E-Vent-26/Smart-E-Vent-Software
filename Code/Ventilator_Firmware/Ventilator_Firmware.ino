@@ -170,8 +170,8 @@ static void _processSerialCommand() {
             FSM_StartCalibration();
             break;
 
-        // --- Reboot ---
-        case 'R': case 'r':
+        / --- Reboot ---
+        case 'Z': case 'z':
             Serial.println(F("[CMD] Rebooting..."));
             HAL_WDT_ForceReboot();
             break;

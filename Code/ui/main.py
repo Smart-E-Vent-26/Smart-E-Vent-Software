@@ -151,7 +151,7 @@ class VentilatorCore(QObject):
     @Slot()
     def calibrateHome(self): self.send_command("H")
     @Slot()
-    def rebootSystem(self): self.send_command("R")
+    def rebootSystem(self): self.send_command("Z")
     @Slot()
     def exitApp(self): 
         print("[SYSTEM] Exiting UI from Kiosk button.")

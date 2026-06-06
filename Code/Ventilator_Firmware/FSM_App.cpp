@@ -400,20 +400,21 @@ void FSM_Update() {
             } else {
                 // Enter expiratory pause for remaining exhale time
                 int32_t pauseMs = (int32_t)_exhaleTimeMs - (int32_t)elapsed;
-            if (pauseMs > 10) {
-                _pauseDurationMs = (uint32_t)pauseMs;
-                _state        = STATE_PAUSE;
-                _stateEntryMs = now;
-                if (!_graphMode) {
-                    Serial.print(F("  [PAUSE] Expiratory: "));
-                    Serial.print(pauseMs); Serial.println(F("ms"));
+                if (pauseMs > 10) {
+                    _pauseDurationMs = (uint32_t)pauseMs;
+                    _state        = STATE_PAUSE;
+                    _stateEntryMs = now;
+                    if (!_graphMode) {
+                        Serial.print(F("  [PAUSE] Expiratory: "));
+                        Serial.print(pauseMs); Serial.println(F("ms"));
+                    }
+                } else {
+                    // No time for pause — start next breath immediately
+                    if (!_graphMode) {
+                        Serial.println(F("========== BREATH COMPLETE ==========\n"));
+                    }
+                    _startInhale();
                 }
-            } else {
-                // No time for pause — start next breath immediately
-                if (!_graphMode) {
-                    Serial.println(F("========== BREATH COMPLETE ==========\n"));
-                }
-                _startInhale();
             }
         }
         break;
