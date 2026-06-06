@@ -171,10 +171,7 @@ ApplicationWindow {
                     titleColor: "white"; backgroundColor: "transparent"; legend.visible: false; antialiasing: true
                     Layout.fillWidth: true; Layout.fillHeight: true; margins { top: 0; bottom: 0; left: 35; right: 15 }
                     ValueAxis { id: axisX_P; min: 0; max: 15; color: "#444"; labelsColor: "white"; tickCount: 6; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
-                    
-                    // FIX: Changed min to -10 so the zero-line is clearly visible!
-                    ValueAxis { id: axisY_P; min: -10; max: 40; color: "#444"; labelsColor: "white"; tickCount: 6; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
-                    
+                    ValueAxis { id: axisY_P; min: 0; max: 40; color: "#444"; labelsColor: "white"; tickCount: 3; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
                     LineSeries { id: pressureSeries; axisX: axisX_P; axisY: axisY_P; color: "#00ffcc"; width: 3 }
                 }
 
@@ -183,7 +180,7 @@ ApplicationWindow {
                     titleColor: "white"; backgroundColor: "transparent"; legend.visible: false; antialiasing: true
                     Layout.fillWidth: true; Layout.fillHeight: true; margins { top: 0; bottom: 0; left: 35; right: 15 }
                     ValueAxis { id: axisX_F; min: 0; max: 15; color: "#444"; labelsColor: "white"; tickCount: 6; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
-                    ValueAxis { id: axisY_F; min: -60; max: 60; color: "#444"; labelsColor: "white"; tickCount: 5; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
+                    ValueAxis { id: axisY_F; min: -60; max: 60; color: "#444"; labelsColor: "white"; tickCount: 3; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
                     LineSeries { id: flowSeries; axisX: axisX_F; axisY: axisY_F; color: "#ffcc00"; width: 3; visible: true }
                     LineSeries { id: calcFlowSeries; axisX: axisX_F; axisY: axisY_F; color: "#00ccff"; width: 3; visible: true }
                 }
@@ -210,10 +207,7 @@ ApplicationWindow {
                     titleColor: "white"; backgroundColor: "transparent"; legend.visible: false; antialiasing: true
                     Layout.fillWidth: true; Layout.fillHeight: true; margins { top: 0; bottom: 0; left: 35; right: 15 }
                     ValueAxis { id: axisX_V; min: 0; max: 15; color: "#444"; labelsColor: "white"; tickCount: 6; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
-                    
-                    // FIX: Changed min to -50 so the zero-line is clearly visible!
-                    ValueAxis { id: axisY_V; min: -50; max: 800; color: "#444"; labelsColor: "white"; tickCount: 5; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
-                    
+                    ValueAxis { id: axisY_V; min: 0; max: 800; color: "#444"; labelsColor: "white"; tickCount: 3; labelFormat: "%.0f"; labelsFont.pixelSize: 12 }
                     LineSeries { id: volumeSeries; axisX: axisX_V; axisY: axisY_V; color: "#ff00ff"; width: 3 }
                 }
 
@@ -267,10 +261,9 @@ ApplicationWindow {
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.calibrateHome() 
                 }
-                
-                // --- REBOOT BUTTON ---
+
                 Button { 
-                    text: "REBOOT SYSTEM"; Layout.fillWidth: true; background: Rectangle { color: "#8E24AA"; radius: 5 } // Purple color
+                    text: "REBOOT SYSTEM"; Layout.fillWidth: true; background: Rectangle { color: "#8E24AA"; radius: 5 }
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.rebootSystem() 
                 }
@@ -287,6 +280,7 @@ ApplicationWindow {
 
                 Text { text: "SETTINGS"; color: "white"; font.bold: true; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
+                // The Fix: ScrollView to prevent Settings from being cut off on 8-inch screens
                 ScrollView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -298,7 +292,7 @@ ApplicationWindow {
                         spacing: 10
 
                         component SettingRow : Rectangle {
-                            id: rootRow 
+                            id: rootRow // Safer internal referencing
                             property string label
                             property string val
                             property int stackIndex
@@ -385,7 +379,35 @@ ApplicationWindow {
                     value: VentCore.log_limit
                     from: 1000
                     to: 1000000
-                    stepSize: 100
+                    stepSize: 1000
+                    editable: true
+                }
+            }
+            
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 20
+                Button {
+                    text: "Save Settings"
+                    background: Rectangle { color: "white"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "black"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        VentCore.log_filename = logFilenameField.text
+                        VentCore.log_limit = logLimitSpin.value
+                        VentCore.is_logging = enableLoggingCheck.checked
+                        loggingDialog.close()
+                    }
+                }
+                Button {
+                    text: "Cancel"
+                    background: Rectangle { color: "#D32F2F"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        enableLoggingCheck.checked = VentCore.is_logging
+                        logFilenameField.text = VentCore.log_filename
+                        logLimitSpin.value = VentCore.log_limit
+                        loggingDialog.close()
+                    }
                 }
             }
         }
@@ -412,9 +434,22 @@ ApplicationWindow {
                 }
             }
         }
-        function onPatient_state_updated(label, color, conf, p_norm, p_obs, p_rest) {
-            mlStatus.text = "ML Analysis: " + label
-            mlStatus.color = color
+        function onMl_diagnostic_updated(status) {
+            mlStatus.text = status
+        }
+    }
+
+    // --- Virtual Touchscreen Keyboard ---
+    InputPanel {
+        id: inputPanel
+        parent: Overlay.overlay
+        z: 9999
+        // Explicitly use mainWindow dimensions to prevent the keyboard from collapsing to 0x0
+        width: mainWindow.width
+        y: active ? mainWindow.height - height : mainWindow.height
+        
+        Behavior on y {
+            NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
         }
     }
 }

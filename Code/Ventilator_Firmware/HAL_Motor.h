@@ -1,11 +1,6 @@
 // ===========================================================
 // HAL_Motor.h — Hardware Abstraction Layer: CS-D508 Driver
-// Smart E-Ventilator Firmware v2.0
-//
-// FIX v2.0:
-//   - Removed duplicate UI pin #defines (belong only in HAL_Board.h)
-//   - Removed misplaced HAL_Board_ReadStartStopBtn / HAL_Board_ReadEStopBtn
-//     declarations (they belong only in HAL_Board.h)
+// Smart E-Ventilator Firmware v1.0
 // ===========================================================
 #ifndef HAL_MOTOR_H
 #define HAL_MOTOR_H

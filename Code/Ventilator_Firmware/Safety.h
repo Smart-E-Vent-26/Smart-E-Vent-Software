@@ -16,7 +16,8 @@
 #define FAULT_SENSOR_FAIL       0x04
 #define FAULT_HALL_NOT_FOUND    0x08
 #define FAULT_DISCONNECT        0x10
-#define FAULT_ESTOP             0x20
+#define FAULT_EMERGENCY_STOP    0x20
+
 // =============================================================
 // PRESSURE SAFETY LIMITS
 // =============================================================

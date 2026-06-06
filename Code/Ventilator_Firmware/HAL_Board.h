@@ -1,10 +1,6 @@
 // ===========================================================
 // HAL_Board.h — Hardware Abstraction Layer: Board & Pin Defs
 // Smart E-Ventilator Firmware v2.0
-//
-// FIX v2.0:
-//   - Added missing declarations for HAL_Board_ReadStartStopBtn()
-//     and HAL_Board_ReadEStopBtn() (were wrongly placed in HAL_Motor.h)
 // ===========================================================
 #ifndef HAL_BOARD_H
 #define HAL_BOARD_H
@@ -27,11 +23,11 @@
 #define PIN_LED_GREEN       6
 #define PIN_LED_YELLOW      7
 #define PIN_LED_RED         8
-#define PIN_BTN_START_STOP  10    // Physical Start/Stop Toggle
-#define PIN_BTN_ESTOP       A1    // Physical Emergency Stop
+#define PIN_START_STOP      10    // Rocker button (start/stop toggle)
 
 // --- Sensors ---
 #define PIN_FLOW_SENSOR     A0    // MPX5010DP Differential Pressure
+#define PIN_EMERGENCY_STOP  A1    // Emergency Stop Switch (NC to GND)
 #define PIN_HALL_SENSOR     A2    // A3144 Hall Effect
 
 // =============================================================
@@ -49,8 +45,8 @@
 #define MECH_FULL_COMPRESS_TURNS    (MECH_FULL_COMPRESS_STEPS / (float)MOTOR_PULSES_PER_REV)
 
 // Volume ↔ Steps calibration (1300 steps = 600 mL)
-const float MECH_STEPS_PER_ML           = 2.166667f;
-const float MECH_MAX_TV_ML              = 600.0f;
+const float MECH_STEPS_PER_ML          = 2.166667f;
+const float MECH_MAX_TV_ML             = 600.0f;
 const float MECH_INHALE_MOTION_FRACTION = 0.8f;   // 80% compression, 20% hold
 
 // =============================================================
@@ -66,12 +62,6 @@ void HAL_Board_Init();
 void HAL_WDT_Enable();
 void HAL_WDT_Reset();
 void HAL_WDT_Disable();
-
-// =============================================================
-// BUTTON READS
-// (Definitions live in HAL_Board.cpp)
-// =============================================================
-bool HAL_Board_ReadStartStopBtn();
-bool HAL_Board_ReadEStopBtn();
+void HAL_WDT_ForceReboot();
 
 #endif // HAL_BOARD_H

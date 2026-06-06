@@ -6,6 +6,7 @@ import serial
 import serial.tools.list_ports
 import csv
 from collections import deque
+import os
 
 # Enable the built-in Qt On-Screen Virtual Keyboard for touchscreens
 os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
@@ -13,12 +14,6 @@ os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
-
-# --- Fix Python Pathing to find ML Directory ---
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-ML_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "ML"))
-if ML_DIR not in sys.path:
-    sys.path.insert(0, ML_DIR)
 
 class SerialReader(QThread):
     """Background thread to read real Arduino telemetry without lagging the UI."""
@@ -30,6 +25,7 @@ class SerialReader(QThread):
         self.running = True
         self.start_time = time.time()
         
+        # Exact regex from your telemetry_visualizer.py
         self.re_flow = re.compile(r'Flow=([-\d.]+)')
         self.re_calc_flow = re.compile(r'CalcFlow=([-\d.]+)')
         self.re_vol = re.compile(r'Vol=([-\d.]+)')
@@ -37,8 +33,9 @@ class SerialReader(QThread):
 
     def run(self):
         try:
+            # write_timeout=0.2 is the magic key that prevents the UI from freezing!
             self.arduino = serial.Serial(self.port, 115200, timeout=0.1, write_timeout=0.2)
-            time.sleep(2) 
+            time.sleep(2) # Wait for arduino reset
             self.arduino.reset_input_buffer()
             print(f"[SYSTEM] Live Telemetry Thread linked to {self.port}")
         except Exception as e:
@@ -50,6 +47,7 @@ class SerialReader(QThread):
                 if self.arduino.in_waiting:
                     line = self.arduino.readline().decode('utf-8', errors='ignore').strip()
                     if line:
+                        # Extract data via Regex
                         f_match = self.re_flow.search(line)
                         cf_match = self.re_calc_flow.search(line)
                         v_match = self.re_vol.search(line)
@@ -60,15 +58,12 @@ class SerialReader(QThread):
                             calc_flow = float(cf_match.group(1)) if cf_match else 0.0
                             vol = float(v_match.group(1))
                             pressure = float(p_match.group(1)) if p_match else 0.0
-                            t = time.time() - self.start_time 
-
-                            # --- LIVE DEBUG PRINT ---
-                            print(f"📊 [LIVE] Pressure: {pressure} | Flow: {flow} | Vol: {vol}")
+                            t = time.time() - self.start_time # seconds for graph X-axis
 
                             self.new_data.emit(t, pressure, vol, flow, calc_flow)
             except Exception:
                 pass
-            time.sleep(0.005) 
+            time.sleep(0.005) # Yield thread
 
     def send_cmd(self, cmd_string):
         """Thread-safe command sending with freeze-protection."""
@@ -81,12 +76,9 @@ class SerialReader(QThread):
             except Exception as e:
                 print(f"[ERROR] Tx Failed: {e}")
 
-
 class VentilatorCore(QObject):
     telemetry_updated = Signal(float, float, float, float, float) 
-    
-    # NEW: Signal to send ML state to QML
-    patient_state_updated = Signal(str, str, float, float, float, float)
+    ml_diagnostic_updated = Signal(str)
     
     rr_changed = Signal()
     tidal_volume_changed = Signal()
@@ -118,25 +110,11 @@ class VentilatorCore(QObject):
         self.reader = None
         self.connect_arduino()
 
-        # Initialize the ML Classifier
-        self.classifier = None
-        try:
-            from ml_classifier import MLClassifier
-            self.classifier = MLClassifier()
-            self.classifier.prediction_ready.connect(self._on_ml_prediction)
-            print("[SYSTEM] ML Classifier initialized successfully.")
-        except Exception as e:
-            print(f"[ERROR] Could not initialize MLClassifier: {e}")
-
-    @Slot(str, str, float, float, float, float)
-    def _on_ml_prediction(self, label, color, conf, p_norm, p_obs, p_rest):
-        """Receives classification from ML thread and forwards it to QML."""
-        self.patient_state_updated.emit(label, color, conf, p_norm, p_obs, p_rest)
-
     def connect_arduino(self):
         ports = list(serial.tools.list_ports.comports())
         for p in ports:
             if "Arduino" in p.description or "ttyACM" in p.device:
+                # Initialize the threaded reader
                 self.reader = SerialReader(p.device)
                 self.reader.new_data.connect(self._on_telemetry_updated)
                 self.reader.start()
@@ -144,16 +122,9 @@ class VentilatorCore(QObject):
         print("[SYSTEM] No Arduino found.")
 
     def _on_telemetry_updated(self, t, p, v, f, cf):
-        # 1. Forward raw data to UI
         self.telemetry_updated.emit(t, p, v, f, cf)
-        
-        # 2. Log data if active
         if self._is_logging:
             self.log_buffer.append([t, p, v, f, cf, self._mode, self._rr, self._tidal_volume, self._ie_ratio, self._target_pip])
-            
-        # 3. Feed data into ML Classifier
-        if self.classifier:
-            self.classifier.push_sample(p, v)
 
     def _flush_log(self):
         if not self._is_logging or not self.log_buffer:
@@ -173,27 +144,20 @@ class VentilatorCore(QObject):
     # --- System Control Slots ---
     @Slot()
     def startVentilation(self): self.send_command("S")
-    
     @Slot()
     def stopVentilation(self): self.send_command("X")
-    
     @Slot()
     def emergencyStop(self): self.send_command("E")
-    
     @Slot()
     def calibrateHome(self): self.send_command("H")
-    
     @Slot()
-    def rebootSystem(self): 
-        print("[SYSTEM] Sending Reboot Command to Arduino...")
-        self.send_command("W")
-        
+    def rebootSystem(self): self.send_command("R")
     @Slot()
     def exitApp(self): 
         print("[SYSTEM] Exiting UI from Kiosk button.")
         self.shutdown()
         os._exit(0)
-        
+
     # --- Properties and Serial Translation ---
     @Property(str, notify=mode_changed)
     def mode(self): return self._mode
@@ -264,11 +228,13 @@ class VentilatorCore(QObject):
     def log_limit(self, value):
         if self._log_limit != value:
             self._log_limit = value
+            # Recreate deque with new limit, copying existing data
             new_buffer = deque(self.log_buffer, maxlen=value)
             self.log_buffer = new_buffer
             self.log_limit_changed.emit()
 
     def shutdown(self):
+        """Gracefully stop background threads when the app closes."""
         if self.reader:
             self.reader.running = False
             self.reader.wait(1000)
