@@ -21,8 +21,6 @@ void HAL_Board_Init() {
     pinMode(PIN_LED_GREEN,  OUTPUT);
     pinMode(PIN_LED_YELLOW, OUTPUT);
     pinMode(PIN_LED_RED,    OUTPUT);
-    pinMode(PIN_START_STOP, INPUT_PULLUP);
-    pinMode(PIN_EMERGENCY_STOP, INPUT_PULLUP);
 
     // Analog sensor pins (A0, A2) do not require pinMode on ATmega328P
 
@@ -53,8 +51,3 @@ uint32_t HAL_GetMicros() { return micros(); }
 void HAL_WDT_Enable()  { wdt_enable(WDTO_500MS); }
 void HAL_WDT_Reset()   { wdt_reset(); }
 void HAL_WDT_Disable() { wdt_disable(); }
-
-void HAL_WDT_ForceReboot() {
-    wdt_enable(WDTO_15MS);
-    while (1) {}
-}

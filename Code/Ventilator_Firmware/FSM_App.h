@@ -66,7 +66,6 @@ void      FSM_SetTargetPIP(float kpa);
 
 void      FSM_StartVentilation();   // READY -> INHALE
 void      FSM_SoftStopVentilation(); // Any -> WAIT -> RETRACT -> READY
-void      FSM_RequestStopAtEnd();   // Wait for breath cycle end -> RETRACT -> READY
 void      FSM_EmergencyStop();      // Any -> BOOT (Requires Homing)
 void      FSM_StartCalibration();   // BOOT  -> CALIBRATE (user-triggered)
 

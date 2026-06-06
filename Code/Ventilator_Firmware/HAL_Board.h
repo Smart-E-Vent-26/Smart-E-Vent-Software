@@ -23,11 +23,9 @@
 #define PIN_LED_GREEN       6
 #define PIN_LED_YELLOW      7
 #define PIN_LED_RED         8
-#define PIN_START_STOP      10    // Rocker button (start/stop toggle)
 
 // --- Sensors ---
 #define PIN_FLOW_SENSOR     A0    // MPX5010DP Differential Pressure
-#define PIN_EMERGENCY_STOP  A1    // Emergency Stop Switch (NC to GND)
 #define PIN_HALL_SENSOR     A2    // A3144 Hall Effect
 
 // =============================================================
@@ -62,6 +60,5 @@ void HAL_Board_Init();
 void HAL_WDT_Enable();
 void HAL_WDT_Reset();
 void HAL_WDT_Disable();
-void HAL_WDT_ForceReboot();
 
 #endif // HAL_BOARD_H

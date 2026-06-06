@@ -47,22 +47,7 @@ void Safety_Update(float currentPressureKpa) {
         pressureAlarmCount = 0;
     }
 
-    // 3. Check Emergency Stop Switch (NC to A1)
-    static uint8_t estopCount = 0;
-    if (digitalRead(PIN_EMERGENCY_STOP) == HIGH) { // Open circuit = pressed
-        estopCount++;
-        if (estopCount >= 3) {
-            _faultCode |= FAULT_EMERGENCY_STOP;
-        }
-    } else {
-        estopCount = 0;
-        if (_faultCode & FAULT_EMERGENCY_STOP) {
-            // "reset it as reboot if I made it back again"
-            HAL_WDT_ForceReboot();
-        }
-    }
-
-    // 4. If ANY fault is active → hard-stop motor, alarm outputs
+    // 3. If ANY fault is active → hard-stop motor, alarm outputs
     static uint32_t faultStartTime = 0;
     if (_faultCode != FAULT_NONE) {
         HAL_Motor_Disable();
@@ -71,10 +56,8 @@ void Safety_Update(float currentPressureKpa) {
         if (faultStartTime == 0) faultStartTime = HAL_GetMillis();
         
         // Auto-mute the loud buzzer after 4 seconds to avoid sensory fatigue
-        if (HAL_GetMillis() - faultStartTime < 4000 || (_faultCode & FAULT_EMERGENCY_STOP)) {
-            if (_faultCode & FAULT_EMERGENCY_STOP) {
-                Safety_BuzzerTone(ALARM_TONE_CRITICAL); // Continuous critical alarm
-            } else if (_faultCode & FAULT_OVERPRESSURE) {
+        if (HAL_GetMillis() - faultStartTime < 4000) {
+            if (_faultCode & FAULT_OVERPRESSURE) {
                 Safety_BuzzerTone(ALARM_TONE_CRITICAL); // 1000 Hz
             } else if (_faultCode & FAULT_DISCONNECT) {
                 Safety_BuzzerTone(ALARM_TONE_DISCONNECT); // 1500 Hz

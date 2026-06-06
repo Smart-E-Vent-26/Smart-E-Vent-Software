@@ -64,9 +64,6 @@ static bool     _graphMode          = false;
 // Calibration sub-state
 static bool     _calibRetracting    = false;
 
-// Hardware Stop request
-static bool     _stopRequested      = false;
-
 // =============================================================
 // HELPER: recompute breath phase timing from current settings
 // =============================================================
@@ -219,18 +216,6 @@ void FSM_Update() {
         Serial.println(F("[FSM] FAULT detected — motor disabled."));
         return;
     }
-
-    // ---- Hardware Rocker Switch Poll ----
-    static bool lastRockerState = true;
-    bool currentRocker = (digitalRead(PIN_START_STOP) == LOW); // LOW = RUN
-    if (currentRocker && !lastRockerState) {
-        if (_state == STATE_READY || _state == STATE_SOFT_STOP_WAIT || _state == STATE_BOOT) {
-            FSM_StartVentilation();
-        }
-    } else if (!currentRocker && lastRockerState) {
-        FSM_RequestStopAtEnd();
-    }
-    lastRockerState = currentRocker;
 
     // ---- State machine ----
     switch (_state) {
@@ -388,18 +373,8 @@ void FSM_Update() {
 
         uint32_t elapsed = now - _stateEntryMs;
         if (Kin_IsComplete() || elapsed >= _exhaleTimeMs) {
-            if (_stopRequested) {
-                // Skip pause, retract slowly to home sensor and stop
-                Serial.println(F("[FSM] Stop requested. Finding home sensor..."));
-                HAL_Motor_Enable();
-                HAL_Motor_SetDirection(MOTOR_DIR_RETRACT);
-                Kin_PlanConstantMove(KIN_CALIBRATE_INTERVAL_US);
-                _state = STATE_RETRACT_HOME;
-                _stateEntryMs = now;
-                _stopRequested = false;
-            } else {
-                // Enter expiratory pause for remaining exhale time
-                int32_t pauseMs = (int32_t)_exhaleTimeMs - (int32_t)elapsed;
+            // Enter expiratory pause for remaining exhale time
+            int32_t pauseMs = (int32_t)_exhaleTimeMs - (int32_t)elapsed;
             if (pauseMs > 10) {
                 _pauseDurationMs = (uint32_t)pauseMs;
                 _state        = STATE_PAUSE;
@@ -442,25 +417,15 @@ void FSM_Update() {
         bool patientTriggered = (acTriggerCount >= 3);
 
         if (pauseElapsed >= _pauseDurationMs || patientTriggered) {
-            if (_stopRequested) {
-                Serial.println(F("[FSM] Stop requested. Finding home sensor..."));
-                HAL_Motor_Enable();
-                HAL_Motor_SetDirection(MOTOR_DIR_RETRACT);
-                Kin_PlanConstantMove(KIN_CALIBRATE_INTERVAL_US);
-                _state = STATE_RETRACT_HOME;
-                _stateEntryMs = now;
-                _stopRequested = false;
-            } else {
-                if (!_graphMode) {
-                    if (patientTriggered) {
-                        Serial.println(F("========== PATIENT TRIGGERED BREATH ==========\n"));
-                    } else {
-                        Serial.println(F("========== BREATH COMPLETE ==========\n"));
-                    }
+            if (!_graphMode) {
+                if (patientTriggered) {
+                    Serial.println(F("========== PATIENT TRIGGERED BREATH ==========\n"));
+                } else {
+                    Serial.println(F("========== BREATH COMPLETE ==========\n"));
                 }
-                acTriggerCount = 0; // reset
-                _startInhale();
             }
+            acTriggerCount = 0; // reset
+            _startInhale();
         }
         break;
     }
@@ -557,11 +522,6 @@ void FSM_SoftStopVentilation() {
     _state        = STATE_SOFT_STOP_WAIT;
     _stateEntryMs = HAL_GetMillis();
     Serial.println(F("[FSM] Soft Stop requested. Pausing 1.5s..."));
-}
-
-void FSM_RequestStopAtEnd() {
-    _stopRequested = true;
-    Serial.println(F("[FSM] Stop requested. Will halt after current breath cycle."));
 }
 
 void FSM_EmergencyStop() {
