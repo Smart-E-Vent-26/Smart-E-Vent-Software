@@ -2,14 +2,30 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtCharts 
+import QtQuick.VirtualKeyboard
 
 ApplicationWindow {
     id: mainWindow
     visible: true
+    visibility: ApplicationWindow.FullScreen
     width: 1280
     height: 800
     title: "BVM Emergency Ventilator"
     color: "#121212" 
+
+    // --- Floating Exit Button ---
+    Button {
+        text: "✕"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 10
+        width: 35
+        height: 35
+        z: 999
+        background: Rectangle { color: "#D32F2F"; radius: 5; border.color: "#B71C1C"; border.width: 2 }
+        contentItem: Text { text: parent.text; color: "white"; font.bold: true; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        onClicked: VentCore.exitApp()
+    }
 
     // --- Dynamic Settings Pop-up ---
     Popup {
@@ -50,14 +66,12 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                // Index 0: Mode Selection
                 ComboBox { 
                     model: ["VCV", "PCV"]
                     currentIndex: find(editPopup.tempString)
                     onActivated: editPopup.tempString = currentText 
                 }
 
-                // Index 1: RR Slider
                 ColumnLayout { 
                     Text { 
                         text: editPopup.tempValue + " BPM"
@@ -73,7 +87,6 @@ ApplicationWindow {
                     } 
                 }
 
-                // Index 2: Tidal Volume Slider
                 ColumnLayout { 
                     Text { 
                         text: editPopup.tempValue + " mL"
@@ -89,14 +102,12 @@ ApplicationWindow {
                     } 
                 }
 
-                // Index 3: I:E Ratio Selection
                 ComboBox { 
                     model: ["1:1", "1:2", "1:3", "1:4"]
                     currentIndex: find(editPopup.tempString)
                     onActivated: editPopup.tempString = currentText 
                 }
 
-                // Index 4: Target PIP Slider
                 ColumnLayout { 
                     Text { 
                         text: editPopup.tempValue + " cmH2O"
@@ -179,7 +190,7 @@ ApplicationWindow {
                         contentItem: Text { text: parent.text; color: "#ffcc00"; font.pixelSize: 14; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
                     }
                     CheckBox {
-                        text: "Virtual Flow"
+                        text: "Calculated Flow"
                         checked: true
                         onCheckedChanged: calcFlowSeries.visible = checked
                         contentItem: Text { text: parent.text; color: "#00ccff"; font.pixelSize: 14; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
@@ -195,13 +206,49 @@ ApplicationWindow {
                     LineSeries { id: volumeSeries; axisX: axisX_V; axisY: axisY_V; color: "#ff00ff"; width: 3 }
                 }
 
-                Text {
-                    id: mlStatus
-                    text: "ML Analysis: Standby"
-                    color: "#ffcc00"
-                    font.pixelSize: 16
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.topMargin: 10
+                // --- NEW ML Patient Status Panel ---
+                Rectangle {
+                    id: mlStatusBox
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    Layout.topMargin: 5
+                    Layout.bottomMargin: 10
+                    Layout.leftMargin: 20
+                    Layout.rightMargin: 20
+                    color: "#2a2a2a"
+                    radius: 8
+                    border.color: stateColor
+                    border.width: 2
+
+                    property string stateLabel: "Analysis Standby (Waiting for breaths...)"
+                    property string stateColor: "#888888"
+                    property string stateConf: "--"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 20
+
+                        Text {
+                            text: "PATIENT STATE:"
+                            color: "white"
+                            font.pixelSize: 18
+                            font.bold: true
+                        }
+                        Text {
+                            text: mlStatusBox.stateLabel
+                            color: mlStatusBox.stateColor
+                            font.pixelSize: 22
+                            font.bold: true
+                            Layout.fillWidth: true
+                        }
+                        Text {
+                            text: "CONFIDENCE: " + mlStatusBox.stateConf + "%"
+                            color: "white"
+                            font.pixelSize: 18
+                            visible: mlStatusBox.stateConf !== "--"
+                        }
+                    }
                 }
             }
         }
@@ -228,23 +275,42 @@ ApplicationWindow {
                         onClicked: VentCore.startVentilation() 
                     }
                     Button { 
-                        text: "STOP"; Layout.fillWidth: true; background: Rectangle { color: "#D32F2F"; radius: 5 }
+                        text: "STOP"; Layout.fillWidth: true; background: Rectangle { color: "#F57C00"; radius: 5 }
                         contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                         onClicked: VentCore.stopVentilation() 
                     }
                 }
                 
                 Button { 
+                    text: "EMERGENCY STOP"; Layout.fillWidth: true; background: Rectangle { color: "#D32F2F"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: VentCore.emergencyStop() 
+                }
+
+                Button { 
                     text: "HOME CALIBRATE"; Layout.fillWidth: true; background: Rectangle { color: "#1565C0"; radius: 5 }
                     contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     onClicked: VentCore.calibrateHome() 
+                }
+                
+                Button { 
+                    text: "REBOOT SYSTEM"; Layout.fillWidth: true; background: Rectangle { color: "#8E24AA"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: VentCore.rebootSystem() 
+                }
+
+                Button {
+                    text: "DATA LOGGING SETTINGS"
+                    Layout.fillWidth: true
+                    background: Rectangle { color: "#555"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: loggingDialog.open()
                 }
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: "#444"; Layout.topMargin: 5; Layout.bottomMargin: 5 }
 
                 Text { text: "SETTINGS"; color: "white"; font.bold: true; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
 
-                // The Fix: ScrollView to prevent Settings from being cut off on 8-inch screens
                 ScrollView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -252,17 +318,17 @@ ApplicationWindow {
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
                     ColumnLayout {
-                        width: parent.width - 15 // Leave room for scrollbar
+                        width: parent.width - 15 
                         spacing: 10
 
                         component SettingRow : Rectangle {
-                            id: rootRow // Safer internal referencing
+                            id: rootRow 
                             property string label
                             property string val
                             property int stackIndex
                             
                             Layout.fillWidth: true
-                            height: 50 // Slimmer profile
+                            height: 50
                             color: "#2a2a2a"
                             radius: 8
                             border.color: mouseArea.pressed ? "#00ffcc" : "#444"
@@ -300,8 +366,86 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        id: loggingDialog
+        title: "Data Logging Settings"
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        modal: true
+        standardButtons: Dialog.NoButton
+        
+        background: Rectangle {
+            color: "#1e1e1e"
+            radius: 10
+            border.color: "#444"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            spacing: 15
+            
+            CheckBox {
+                id: enableLoggingCheck
+                text: "Save Ventilation Data"
+                checked: VentCore.is_logging
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 16; leftPadding: parent.indicator.width + parent.spacing; verticalAlignment: Text.AlignVCenter }
+            }
+            
+            RowLayout {
+                Text { text: "File Name:"; color: "gray"; font.pixelSize: 14 }
+                TextField {
+                    id: logFilenameField
+                    text: VentCore.log_filename
+                    color: "white"
+                    background: Rectangle { color: "#333"; radius: 5 }
+                    Layout.fillWidth: true
+                }
+            }
+            
+            RowLayout {
+                Text { text: "Max Rows Limit:"; color: "gray"; font.pixelSize: 14 }
+                SpinBox {
+                    id: logLimitSpin
+                    value: VentCore.log_limit
+                    from: 1000
+                    to: 1000000
+                    stepSize: 1000
+                    editable: true
+                }
+            }
+            
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 20
+                Button {
+                    text: "Save Settings"
+                    background: Rectangle { color: "white"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "black"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        VentCore.log_filename = logFilenameField.text
+                        VentCore.log_limit = logLimitSpin.value
+                        VentCore.is_logging = enableLoggingCheck.checked
+                        loggingDialog.close()
+                    }
+                }
+                Button {
+                    text: "Cancel"
+                    background: Rectangle { color: "#D32F2F"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    onClicked: {
+                        enableLoggingCheck.checked = VentCore.is_logging
+                        logFilenameField.text = VentCore.log_filename
+                        logLimitSpin.value = VentCore.log_limit
+                        loggingDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
     Connections {
         target: VentCore
+        
         function onTelemetry_updated(time, pressure, volume, flow, calc_flow) {
             pressureSeries.append(time, pressure)
             volumeSeries.append(time, volume)
@@ -321,8 +465,25 @@ ApplicationWindow {
                 }
             }
         }
-        function onMl_diagnostic_updated(status) {
-            mlStatus.text = status
+
+        // --- NEW Receiver for ML Status ---
+        function onPatient_state_updated(label, color, conf, p_norm, p_obs, p_rest) {
+            mlStatusBox.stateLabel = label
+            mlStatusBox.stateColor = color
+            mlStatusBox.stateConf = (conf * 100).toFixed(1)
+        }
+    }
+
+    // --- Virtual Touchscreen Keyboard ---
+    InputPanel {
+        id: inputPanel
+        parent: Overlay.overlay
+        z: 9999
+        width: mainWindow.width
+        y: active ? mainWindow.height - height : mainWindow.height
+        
+        Behavior on y {
+            NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
         }
     }
 }

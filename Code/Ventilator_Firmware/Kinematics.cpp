@@ -220,7 +220,7 @@ void Kin_PlanInhale(int32_t totalSteps) {
 void Kin_PlanExhale(int32_t totalSteps) {
     Kin_PlanMove(totalSteps, _exhaleCruiseUs);
 }
-// Add this to Kinematics.cpp
+
 void Kin_SetCruiseInterval(uint32_t intervalUs) {
     if (intervalUs < KIN_MIN_STEP_INTERVAL_US) intervalUs = KIN_MIN_STEP_INTERVAL_US;
     if (intervalUs > KIN_MAX_STEP_INTERVAL_US) intervalUs = KIN_MAX_STEP_INTERVAL_US;

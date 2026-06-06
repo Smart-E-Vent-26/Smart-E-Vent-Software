@@ -82,7 +82,6 @@ int32_t  Kin_GetStrokeSteps();
 // Convenience: plan using pre-computed cruise intervals
 void     Kin_PlanInhale(int32_t totalSteps);
 void     Kin_PlanExhale(int32_t totalSteps);
-// Add this to Kinematics.h
-void Kin_SetCruiseInterval(uint32_t intervalUs);
+void     Kin_SetCruiseInterval(uint32_t intervalUs);
 
 #endif // KINEMATICS_H

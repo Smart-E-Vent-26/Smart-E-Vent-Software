@@ -19,6 +19,7 @@ static Adafruit_BMP280 _bmpAmbient;   // 0x76
 static Adafruit_BMP280 _bmpAirway;    // 0x77
 static bool _bmpAmbientOk = false;
 static bool _bmpAirwayOk  = false;
+static float _pressureOffsetKpa = 0.0f;
 
 // =============================================================
 // FLOW SENSOR AUTO-ZERO STATE
@@ -32,7 +33,10 @@ void HAL_Sensors_Init() {
     // Analog pins do not require pinMode on ATmega328P.
     // Perform a few dummy reads to let the ADC multiplexer settle.
     analogRead(PIN_FLOW_SENSOR);
-    analogRead(PIN_HALL_SENSOR);
+    
+    // Configure Hall Sensor as digital input with internal pull-up
+    pinMode(PIN_HALL_SENSOR, INPUT_PULLUP);
+    
     delay(10);
 }
 
@@ -64,6 +68,26 @@ bool HAL_Sensors_InitPressure() {
                                Adafruit_BMP280::STANDBY_MS_63);
     }
 
+    if (_bmpAmbientOk && _bmpAirwayOk) {
+        Serial.print(F("[INIT] Auto-zeroing pressure... "));
+        for (int i=0; i<5; i++) {
+            _bmpAirway.readPressure();
+            _bmpAmbient.readPressure();
+            delay(50);
+        }
+        float sumOffset = 0;
+        for(int i=0; i<10; i++) {
+            float pA = _bmpAirway.readPressure();
+            float pB = _bmpAmbient.readPressure();
+            sumOffset += (pA - pB) / 1000.0f;
+            delay(10);
+        }
+        _pressureOffsetKpa = sumOffset / 10.0f;
+        Serial.print(F("Offset = "));
+        Serial.print(_pressureOffsetKpa, 3);
+        Serial.println(F(" kPa"));
+    }
+
     return (_bmpAmbientOk && _bmpAirwayOk);
 }
 
@@ -71,30 +95,29 @@ bool HAL_Sensors_InitPressure() {
 // BMP280 Pressure — Differential Read
 // Returns (airway - ambient) in kPa
 // =============================================================
-// =============================================================
-// BMP280 Pressure — Differential Read (With EMI Outlier Rejection)
-// Returns (airway - ambient) in kPa
-// =============================================================
 float HAL_Sensors_ReadPressureKpa() {
-    static float lastGoodKpa = 0.0f; 
-
+    static float lastValidKpa = 0.0f;
     if (_bmpAmbientOk && _bmpAirwayOk) {
         float pAirway  = _bmpAirway.readPressure();     // Pa
         float pAmbient = _bmpAmbient.readPressure();    // Pa
-        float currentKpa = (pAirway - pAmbient) / 1000.0f; // kPa
-
-        // --- SOFTWARE EMI SHIELD ---
-        // 8.0 kPa is ~81 cmH2O. Human lungs pop at 40 cmH2O. 
-        // Anything above 8.0 or below -2.0 is a physically impossible ghost spike.
-        if (currentKpa > 8.0f || currentKpa < -2.0f) {
-            return lastGoodKpa; // Ignore the EMI noise, return the last safe reading!
-        }
         
-        lastGoodKpa = currentKpa; 
+        // --- I2C Lockup Recovery ---
+        if (isnan(pAirway) || isnan(pAmbient) || (pAirway == 0.0f && pAmbient == 0.0f)) {
+            Serial.println(F("[ERR] BMP280 I2C Lockup. Rebooting sensors..."));
+            _bmpAmbient.begin(0x76);
+            _bmpAirway.begin(0x77);
+            _bmpAmbient.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2, Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X4, Adafruit_BMP280::STANDBY_MS_63);
+            _bmpAirway.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2, Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X4, Adafruit_BMP280::STANDBY_MS_63);
+            return lastValidKpa;
+        }
+
+        float currentKpa = ((pAirway - pAmbient) / 1000.0f) - _pressureOffsetKpa; // kPa
+        lastValidKpa = currentKpa;
         return currentKpa;
     }
     return 0.0f;
 }
+
 bool HAL_Sensors_IsPressureOk() {
     return (_bmpAmbientOk && _bmpAirwayOk);
 }
@@ -138,14 +161,25 @@ float HAL_Sensors_GetFlowZero() {
 }
 
 // =============================================================
-// Hall Effect Sensor (AT3503 on A2)
+// Hall Effect Sensor
 // =============================================================
 uint16_t HAL_Sensors_ReadHallRaw() {
     return analogRead(PIN_HALL_SENSOR);
 }
 
 bool HAL_Sensors_IsHallTriggered() {
-    // A3144 + 10K pull-up: LOW ADC value = magnet detected
     uint16_t val = HAL_Sensors_ReadHallRaw();
+    
+    // DEBUG: Print the raw value to Serial twice a second so we can see what the sensor is actually outputting!
+    // Uncomment this block if you ever need to debug the Hall sensor in the future:
+    /*
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 500) {
+        Serial.print(F("[DEBUG] Raw Hall ADC: "));
+        Serial.println(val);
+        lastPrint = millis();
+    }
+    */
+    
     return (val < HALL_TRIGGER_THRESHOLD);
 }

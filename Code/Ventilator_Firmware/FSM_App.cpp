@@ -22,6 +22,7 @@
 #include "Kinematics.h"
 #include "Filters.h"
 #include "Safety.h"
+#include <avr/wdt.h>
 
 // =============================================================
 // COMPILE-TIME DEFAULTS
@@ -40,6 +41,7 @@ static VentState    _state            = STATE_BOOT;
 static VentMode     _mode             = MODE_VCV;
 static VentSettings _settings;
 static EMA_Filter   _flowFilter;
+static bool     _stopRequested      = false; // NEW: Tracks deferred stop
 
 // Timing helpers
 static uint32_t _stateEntryMs    = 0;
@@ -53,6 +55,7 @@ static uint32_t _exhaleTimeMs    = 0;
 // Per-breath bookkeeping
 static int32_t  _currentInhaleSteps = 0;
 static float    _currentPressureKpa = 0.0f;
+static float    _peakPressureKpa    = 0.0f; // Track PIP for Disconnect Alarm
 static float    _currentFlowLPM     = 0.0f;
 static uint32_t _holdDurationMs     = 0;   // Inspiratory hold duration
 static uint32_t _pauseDurationMs    = 0;   // Expiratory pause duration
@@ -62,7 +65,7 @@ static bool     _graphMode          = false;
 
 // Calibration sub-state
 static bool     _calibRetracting    = false;
-
+static void _startInhale();
 // =============================================================
 // HELPER: recompute breath phase timing from current settings
 // =============================================================
@@ -81,11 +84,34 @@ static void _updateKinematics() {
                        _settings.targetTidalVolume_mL);
     _computeBreathTiming();
 }
-
+// =============================================================
+// HELPER: Handles transition at the end of a full breath cycle
+// =============================================================
+static void _finishBreath(bool patientTriggered = false) {
+    if (_stopRequested) {
+        if (!_graphMode) Serial.println(F("========== VENTILATION STOPPED (User Request) ==========\n"));
+        _stopRequested = false;
+        _state = STATE_READY;
+        _stateEntryMs = HAL_GetMillis();
+        // The motor is already at the home position here.
+    } else {
+        if (!_graphMode) {
+            if (patientTriggered) {
+                Serial.println(F("========== PATIENT TRIGGERED BREATH ==========\n"));
+            } else {
+                Serial.println(F("========== BREATH COMPLETE ==========\n"));
+            }
+        }
+        _startInhale();
+    }
+}
 // =============================================================
 // HELPER: begin a new inhale phase
 // =============================================================
 static void _startInhale() {
+    _stateEntryMs = HAL_GetMillis();
+    _peakPressureKpa = 0.0f; // Reset peak tracker for the new breath
+
     _updateKinematics();
 
     int32_t targetSteps;
@@ -141,8 +167,35 @@ void FSM_Init() {
 // =============================================================
 // FSM_Update — Called every loop() iteration
 // =============================================================
+#include <avr/wdt.h> // Make sure this is at the top of FSM_App.cpp
+
 void FSM_Update() {
     uint32_t now = HAL_GetMillis();
+
+    // ---- Hardware Emergency Stop (NC Wiring & Auto-Reboot) ----
+    static bool lastEStopPressed = false;
+    bool currentEStopPressed = HAL_Board_ReadEStopBtn();
+
+    if (currentEStopPressed) {
+        if (_state != STATE_FAULT) {
+            Kin_Stop();
+            HAL_Motor_Disable();
+            Safety_SetFault(FAULT_ESTOP); // This turns ON Red LED and Buzzer
+            _state = STATE_FAULT;
+            _stateEntryMs = now;
+            Serial.println(F("[FSM] HARDWARE E-STOP PRESSED! System Halted."));
+        }
+        lastEStopPressed = true;
+        return; // Halt FSM updates while pressed
+    } 
+    else if (!currentEStopPressed && lastEStopPressed) {
+        // Switch was released (Closed again). Reboot the system!
+        Serial.println(F("[FSM] E-Stop Released. Rebooting system..."));
+        delay(100); // Allow serial to print
+        wdt_enable(WDTO_15MS); // Trigger hardware reset in 15 milliseconds
+        while(1) {}            // Trap the processor until the watchdog bites
+    }
+    lastEStopPressed = currentEStopPressed;
 
     // ---- Slow-loop: periodic sensor read (BMP280 pressure) ----
     if ((now - _lastSensorMs) >= SENSOR_POLL_INTERVAL_MS) {
@@ -187,6 +240,8 @@ void FSM_Update() {
                 case STATE_HOLD:   phaseLabel = "HLD"; break;
                 case STATE_EXHALE: phaseLabel = "EXH"; break;
                 case STATE_PAUSE:  phaseLabel = "PAU"; break;
+                case STATE_SOFT_STOP_WAIT: phaseLabel = "S_W"; break;
+                case STATE_RETRACT_HOME: phaseLabel = "S_R"; break;
                 default:           phaseLabel = "???"; break;
             }
             Serial.print(F("  ")); Serial.print(phaseLabel);
@@ -268,27 +323,43 @@ void FSM_Update() {
     // ----------------------------------------------------------
     case STATE_INHALE: {
         Kin_Update();
-       // Replace the old PCV block in FSM_Update() with this:
-if (_mode == MODE_PCV) {
-    float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
-    
-    // Proportional "Soft Landing" ramp
-    if (pressureError < 0.5f && pressureError > 0.0f) { 
-        float speedFactor = max(0.1f, pressureError / 0.5f); 
-        Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor)); 
-    }
-    
-    // Safety Hard-Stop
-    if (_currentPressureKpa >= _settings.targetPIP_kPa) {
-        Kin_Stop();
-    }
-}
 
+        // Track peak pressure for Disconnect Alarm
+        if (_currentPressureKpa > _peakPressureKpa) {
+            _peakPressureKpa = _currentPressureKpa;
+        }
+
+        // PCV: stop advancing once target PIP is reached
+        if (_mode == MODE_PCV) {
+            float pressureError = _settings.targetPIP_kPa - _currentPressureKpa;
+            
+            // Proportional "Soft Landing" ramp
+            if (pressureError < 0.5f && pressureError > 0.0f) { 
+                float speedFactor = max(0.1f, pressureError / 0.5f); 
+                Kin_SetCruiseInterval((uint32_t)(Kin_GetInhaleCruiseUs() / speedFactor)); 
+            }
+            
+            // Safety Hard-Stop
+            if (_currentPressureKpa >= _settings.targetPIP_kPa) {
+                Kin_Stop();
+                if (!_graphMode) {
+                    Serial.print(F("  [PIP] Target reached at P="));
+                    Serial.print(_currentPressureKpa, 2);
+                    Serial.println(F(" kPa"));
+                }
+            }
+        }
 
         // Transition: motor done OR inhale time exceeded
         uint32_t elapsed = now - _stateEntryMs;
         if (Kin_IsComplete() || elapsed >= _inhaleTimeMs) {
             _currentInhaleSteps = Kin_GetStepsCompleted();
+
+            // Disconnect Alarm Check (Peak pressure < 5 cmH2O)
+            if (_peakPressureKpa < 0.5f) {
+                Safety_SetFault(FAULT_DISCONNECT);
+                Serial.println(F("[FSM] FAULT: Patient Disconnected! (Peak PIP < 5 cmH2O)"));
+            }
 
             if (!_graphMode) {
                 Serial.print(F("\n  >> DELIVERED: "));
@@ -362,11 +433,8 @@ if (_mode == MODE_PCV) {
                     Serial.print(pauseMs); Serial.println(F("ms"));
                 }
             } else {
-                // No time for pause — start next breath immediately
-                if (!_graphMode) {
-                    Serial.println(F("========== BREATH COMPLETE ==========\n"));
-                }
-                _startInhale();
+                // No time for pause — check if we should stop, or start next breath
+                _finishBreath();
             }
         }
         break;
@@ -375,17 +443,73 @@ if (_mode == MODE_PCV) {
     // ----------------------------------------------------------
     // PAUSE: Expiratory pause — motor at home, waiting
     // Wait for _pauseDurationMs, then start next breath.
+    // Patient-Triggered Assist-Control (A/C) Mode is active here.
     // ----------------------------------------------------------
     case STATE_PAUSE: {
         uint32_t pauseElapsed = now - _stateEntryMs;
-        if (pauseElapsed >= _pauseDurationMs) {
+        
+        // --- Assist-Control (A/C) Trigger Logic ---
+        // If the patient attempts to inhale, the pressure will drop.
+        // We use a -0.2 kPa (-2.0 cmH2O) threshold.
+        static uint8_t acTriggerCount = 0;
+        if (_currentPressureKpa < -0.2f) {
+            acTriggerCount++;
+        } else {
+            acTriggerCount = 0;
+        }
+
+        // Require 3 consecutive slow-loop polls (approx 120ms) to trigger a breath.
+        // This acts as a debounce window to ignore random 40ms electrical spikes.
+        bool patientTriggered = (acTriggerCount >= 3);
+
+        if (pauseElapsed >= _pauseDurationMs || patientTriggered) {
             if (!_graphMode) {
-                Serial.println(F("========== BREATH COMPLETE ==========\n"));
+                if (patientTriggered) {
+                    Serial.println(F("========== PATIENT TRIGGERED BREATH ==========\n"));
+                } else {
+                    Serial.println(F("========== BREATH COMPLETE ==========\n"));
+                }
             }
+            acTriggerCount = 0; // reset
             _startInhale();
         }
         break;
     }
+
+    // ----------------------------------------------------------
+    // SOFT STOP WAIT: Pausing 1.5s before retracting
+    // ----------------------------------------------------------
+    case STATE_SOFT_STOP_WAIT:
+        if ((now - _stateEntryMs) >= 1500UL) {
+            Serial.println(F("[FSM] Retracting slowly to home..."));
+            HAL_Motor_Enable();
+            HAL_Motor_SetDirection(MOTOR_DIR_RETRACT);
+            Kin_PlanConstantMove(KIN_CALIBRATE_INTERVAL_US);
+            _state = STATE_RETRACT_HOME;
+            _stateEntryMs = now;
+        }
+        break;
+
+    // ----------------------------------------------------------
+    // RETRACT HOME: Slowly moving to home sensor
+    // ----------------------------------------------------------
+    case STATE_RETRACT_HOME:
+        if (HAL_Sensors_IsHallTriggered()) {
+            Kin_Stop();
+            HAL_Motor_Disable();
+            Safety_SetLEDs(true, false, false);
+            _state = STATE_READY;
+            _stateEntryMs = now;
+            Serial.println(F("[FSM] Soft Stop Complete. System READY."));
+        } else if ((now - _stateEntryMs) > 30000UL) {
+            Kin_Stop();
+            HAL_Motor_Disable();
+            Safety_SetFault(FAULT_HALL_NOT_FOUND);
+            Serial.println(F("[FSM] FAULT: Hall sensor not found during retract!"));
+        } else {
+            Kin_Update(); // Continue moving slowly
+        }
+        break;
 
     // ----------------------------------------------------------
     // FAULT: Motor disabled, alarm active
@@ -434,17 +558,25 @@ void FSM_StartVentilation() {
         Serial.println(F("[ERR] Not ready. Home first (H)."));
         return;
     }
+    _stopRequested = false; // Clear flag on fresh start
     Serial.println(F("[FSM] Ventilation STARTED."));
     _startInhale();
 }
 
-void FSM_StopVentilation() {
+void FSM_SoftStopVentilation() {
+    if (_state == STATE_READY || _state == STATE_BOOT) return;
+    
+    // Instead of instantly halting the motor mid-stroke, we defer it.
+    _stopRequested = true;
+    Serial.println(F("[FSM] Soft Stop requested (GUI). Waiting for breath to finish..."));
+}
+
+void FSM_EmergencyStop() {
     Kin_Stop();
     HAL_Motor_Disable();
-    Safety_SetLEDs(true, false, false);
-    _state        = STATE_READY;
+    _state        = STATE_BOOT;
     _stateEntryMs = HAL_GetMillis();
-    Serial.println(F("[FSM] Ventilation STOPPED."));
+    Serial.println(F("[FSM] EMERGENCY STOPPED. Must Home (H) before starting again."));
 }
 
 void FSM_StartCalibration() {
@@ -486,5 +618,11 @@ uint32_t  FSM_GetExhaleTimeMs()             { return _exhaleTimeMs; }
 void      FSM_SetGraphMode(bool enabled)    { _graphMode = enabled; }
 
 float FSM_GetDeliveredVolumeMl() {
-    return (float)Kin_GetStepsCompleted() / MECH_STEPS_PER_ML;
+    float currentVol = (float)Kin_GetStepsCompleted() / MECH_STEPS_PER_ML;
+    if (_state == STATE_EXHALE || _state == STATE_PAUSE || _state == STATE_RETRACT_HOME) {
+        float maxVol = (float)_currentInhaleSteps / MECH_STEPS_PER_ML;
+        float remaining = maxVol - currentVol;
+        return (remaining > 0.0f) ? remaining : 0.0f;
+    }
+    return currentVol;
 }

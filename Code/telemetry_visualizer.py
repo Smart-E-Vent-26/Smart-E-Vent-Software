@@ -92,12 +92,7 @@ def serial_reader(ser, stop_event, csv_writer, csv_file, start_time):
                             p_val = float(p_match.group(1)) if p_match else 0.0
                             t_val = (time.time() - start_time) * 1000.0  
 
-                            # --- THE VOLUME FIX ---
-                            # If exhaling, invert the volume so the graph drops back to zero
-                            if is_exhaling:
-                                v_val = 400.0 - v_val 
-                                if v_val < 0: v_val = 0.0 # Prevent it from dropping below zero
-                            # ----------------------
+
 
                             # 2. Append to graph queues
                             timestamps.append(t_val)

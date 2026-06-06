@@ -21,6 +21,9 @@ void HAL_Board_Init() {
     pinMode(PIN_LED_GREEN,  OUTPUT);
     pinMode(PIN_LED_YELLOW, OUTPUT);
     pinMode(PIN_LED_RED,    OUTPUT);
+    // Configure Buttons with Internal Pull-ups
+    pinMode(PIN_BTN_START_STOP, INPUT_PULLUP);
+    pinMode(PIN_BTN_ESTOP, INPUT_PULLUP);
 
     // Analog sensor pins (A0, A2) do not require pinMode on ATmega328P
 
@@ -51,3 +54,17 @@ uint32_t HAL_GetMicros() { return micros(); }
 void HAL_WDT_Enable()  { wdt_enable(WDTO_500MS); }
 void HAL_WDT_Reset()   { wdt_reset(); }
 void HAL_WDT_Disable() { wdt_disable(); }
+// =============================================================
+// =============================================================
+// Physical Button Reads 
+// =============================================================
+bool HAL_Board_ReadStartStopBtn() {
+    // Active LOW because of INPUT_PULLUP (Pressed = GND)
+    return (digitalRead(PIN_BTN_START_STOP) == LOW);
+}
+
+bool HAL_Board_ReadEStopBtn() {
+    // NC Wiring: When pressed, circuit opens, and pull-up makes it HIGH
+    return (digitalRead(PIN_BTN_ESTOP) == HIGH); 
+}
+
