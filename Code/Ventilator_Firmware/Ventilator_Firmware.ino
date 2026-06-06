@@ -171,17 +171,22 @@ static void _processSerialCommand() {
             break;
 
 // --- EMERGENCY HARDWARE REBOOT ---
+        // --- EMERGENCY HARDWARE REBOOT ---
         case 'Z': case 'z':
             Serial.println(F("[SYSTEM] Emergency Reboot triggered via UI."));
+            
             // 1. Instantly kill the motor driver
             HAL_Motor_Disable(); 
+            
             // 2. Turn on the Red Error LED
             Safety_SetLEDs(false, false, true); 
-            // 3. Trap the CPU. 
-            // Since HAL_WDT_Enable() was already called in your setup(), 
-            // staying in this loop prevents HAL_WDT_Reset() from running. 
-            // The 500ms watchdog will bite and hard-reset the board.
-            while (true) { } 
+            
+            // 3. Wait a tiny moment for the serial message to finish sending
+            delay(50);
+            
+            // 4. Force a software jump to address 0 (Restarts the code)
+            void (*resetFunc)(void) = 0; 
+            resetFunc(); 
             break;
         // --- Mode ---
         case 'V': case 'v':
