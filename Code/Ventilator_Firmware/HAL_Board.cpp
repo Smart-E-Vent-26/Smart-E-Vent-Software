@@ -21,6 +21,10 @@ void HAL_Board_Init() {
     pinMode(PIN_LED_GREEN,  OUTPUT);
     pinMode(PIN_LED_YELLOW, OUTPUT);
     pinMode(PIN_LED_RED,    OUTPUT);
+    
+    // Hardware Buttons
+    pinMode(PIN_BTN_EMERGENCY, INPUT_PULLUP);
+    pinMode(PIN_BTN_STARTSTOP, INPUT_PULLUP);
 
     // Analog sensor pins (A0, A2) do not require pinMode on ATmega328P
 

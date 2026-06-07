@@ -20,7 +20,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 # Layout:  <project_root>/ML/pressure_classifier.py
 #          <project_root>/ML/weights/pressure_models.pkl
 _THIS_DIR    = os.path.dirname(os.path.abspath(__file__))
-_ML_DIR      = os.path.join(_THIS_DIR,"..", "ML")
+_ML_DIR      = os.path.abspath(os.path.join(_THIS_DIR, "..", "ML"))
 sys.path.insert(0, _ML_DIR)
 from pressure_classifier import extract_pressure_features   # pure function, no side-effects
 
@@ -293,6 +293,13 @@ class VentilatorCore(QObject):
     def emergencyStop(self):    self.send_command("E")
     @Slot()
     def calibrateHome(self):    self.send_command("H")
+    @Slot()
+    def rebootSystem(self): 
+        print("[EMERGENCY] Initiating full system hardware reboot...")
+        self.send_command("Z")
+        time.sleep(0.1) 
+        self.shutdown()
+        os.system("sudo reboot")
     @Slot()
     def exitApp(self):
         self.shutdown()

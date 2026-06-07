@@ -45,6 +45,13 @@ static float   _tvMl     = 400.0f;
 static float   _pipKpa   = 2.5f;
 
 // =============================================================
+// HARDWARE BUTTON STATES
+// =============================================================
+static bool _lastStartStopState = HIGH; // Unpressed state due to pull-up
+static uint32_t _lastDebounceTime = 0;
+const uint32_t DEBOUNCE_DELAY = 50;
+
+// =============================================================
 // HELPER: Read an integer from Serial input buffer
 // =============================================================
 static int32_t _readSerialInt() {
@@ -170,6 +177,24 @@ static void _processSerialCommand() {
             FSM_StartCalibration();
             break;
 
+// --- EMERGENCY HARDWARE REBOOT ---
+        // --- EMERGENCY HARDWARE REBOOT ---
+        case 'Z': case 'z':
+            Serial.println(F("[SYSTEM] Emergency Reboot triggered via UI."));
+            
+            // 1. Instantly kill the motor driver
+            HAL_Motor_Disable(); 
+            
+            // 2. Turn on the Red Error LED
+            Safety_SetLEDs(false, false, true); 
+            
+            // 3. Wait a tiny moment for the serial message to finish sending
+            delay(50);
+            
+            // 4. Force a software jump to address 0 (Restarts the code)
+            void (*resetFunc)(void) = 0; 
+            resetFunc(); 
+            break;
         // --- Mode ---
         case 'V': case 'v':
             FSM_SetMode(MODE_VCV);
@@ -312,10 +337,57 @@ void setup() {
 }
 
 // =============================================================
+// HARDWARE BUTTONS POLLING
+// =============================================================
+static void _pollHardwareButtons() {
+    // --- EMERGENCY STOP (AB6-A Mushroom, NC to GND, C to A1) ---
+    // With INPUT_PULLUP, NC to GND means it reads LOW normally.
+    // When pressed, the circuit breaks, so it reads HIGH.
+    // Wait, the user said: "Pin A1 to the Emergency Stop Mushroom Button, wiring: C connected to signal Pin A1, NC to GND."
+    // This means when NOT pressed, A1 is pulled LOW through the NC contact.
+    // When PRESSED, NC opens, so A1 floats HIGH due to INPUT_PULLUP.
+    bool emgState = digitalRead(PIN_BTN_EMERGENCY);
+    if (emgState == HIGH) {
+        // Mushroom is pressed! (NC broken)
+        Serial.println(F("[SYSTEM] Emergency Stop Button PRESSED."));
+        FSM_EmergencyStop();
+        
+        HAL_Motor_Disable(); 
+        Safety_SetLEDs(false, false, true); 
+        delay(50);
+        
+        // Software jump to address 0 (Restarts the code)
+        void (*resetFunc)(void) = 0; 
+        resetFunc(); 
+    }
+
+    // --- START/STOP ROCKER (Signal to 10, GND to right pin) ---
+    // With INPUT_PULLUP, ON position = LOW (connected to GND), OFF position = HIGH
+    bool currentRockerState = digitalRead(PIN_BTN_STARTSTOP);
+    if (currentRockerState != _lastStartStopState) {
+        if (millis() - _lastDebounceTime > DEBOUNCE_DELAY) {
+            _lastDebounceTime = millis();
+            _lastStartStopState = currentRockerState;
+            
+            if (currentRockerState == LOW) {
+                // Toggled to ON
+                Serial.println(F("[UI] Rocker Switch ON -> Start"));
+                FSM_StartVentilation();
+            } else {
+                // Toggled to OFF
+                Serial.println(F("[UI] Rocker Switch OFF -> Stop"));
+                FSM_SoftStopVentilation();
+            }
+        }
+    }
+}
+
+// =============================================================
 // LOOP
 // =============================================================
 void loop() {
     HAL_WDT_Reset();
     FSM_Update();
     _processSerialCommand();
+    _pollHardwareButtons();
 }

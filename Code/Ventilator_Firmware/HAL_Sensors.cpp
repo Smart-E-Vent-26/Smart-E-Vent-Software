@@ -102,7 +102,7 @@ float HAL_Sensors_ReadPressureKpa() {
         float pAmbient = _bmpAmbient.readPressure();    // Pa
         
         // --- I2C Lockup Recovery ---
-        if (isnan(pAirway) || isnan(pAmbient) || (pAirway == 0.0f && pAmbient == 0.0f)) {
+        if (isnan(pAirway) || isnan(pAmbient) || pAmbient < 50000.0f) {
             Serial.println(F("[ERR] BMP280 I2C Lockup. Rebooting sensors..."));
             _bmpAmbient.begin(0x76);
             _bmpAirway.begin(0x77);
