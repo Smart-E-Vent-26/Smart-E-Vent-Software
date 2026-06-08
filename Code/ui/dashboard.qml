@@ -191,9 +191,9 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 font.pixelSize: 30; font.bold: true; color: "white"
                                 text: {
-                                    if (mlLabel.text === "Normal")      return "✓"
-                                    if (mlLabel.text === "Obstructive") return "⚠"
-                                    if (mlLabel.text === "Restrictive") return "⚠"
+                                    if (VentCore.patient_status === "Normal")      return "✓"
+                                    if (VentCore.patient_status === "Obstructive") return "⚠"
+                                    if (VentCore.patient_status === "Restrictive") return "⚠"
                                     return "?"
                                 }
                             }
@@ -212,14 +212,14 @@ ApplicationWindow {
 
                             Text {
                                 id: mlLabel
-                                text: "Awaiting breath…"
+                                text: "Patient Status: " + VentCore.patient_status
                                 color: mlAccent.color
                                 font.pixelSize: 22; font.bold: true
                                 Behavior on color { ColorAnimation { duration: 400 } }
                             }
                             Text {
                                 id: mlConfidence
-                                text: "ML model ready — waiting for first breath cycle"
+                                text: "System active — awaiting breath analysis"
                                 color: "#aaaaaa"; font.pixelSize: 12
                             }
                         }
@@ -448,7 +448,6 @@ ApplicationWindow {
         function onMl_prediction_updated(label, color, confidence,
                                           probNormal, probObstr, probRestr) {
             mlAccent.color           = color
-            mlLabel.text             = label
             mlConfidence.text        = "Confidence: " + Math.round(confidence * 100)
                                        + "%   (3-breath rolling vote)"
             barNormal.prob           = probNormal

@@ -218,6 +218,7 @@ class VentilatorCore(QObject):
     # ML result — consumed by the QML diagnostic panel
     # Args: label, hex_color, confidence, prob_normal, prob_obstr, prob_restr
     ml_prediction_updated = Signal(str, str, float, float, float, float)
+    patient_status_changed = Signal()
 
     rr_changed           = Signal()
     tidal_volume_changed = Signal()
@@ -239,6 +240,7 @@ class VentilatorCore(QObject):
         self._log_filename = os.path.expanduser("~/vent_data.csv")
         self._log_limit    = 10000
         self.log_buffer    = deque(maxlen=self._log_limit)
+        self._patient_status = "Standby"
 
         self.log_timer = QTimer(self)
         self.log_timer.timeout.connect(self._flush_log)
@@ -246,7 +248,7 @@ class VentilatorCore(QObject):
 
         # ML classifier — loads weights at startup, emits directly to QML signal
         self.classifier = MLClassifier(self)
-        self.classifier.prediction_ready.connect(self.ml_prediction_updated)
+        self.classifier.prediction_ready.connect(self._on_prediction_ready)
 
         self.reader = None
         self.connect_arduino()
@@ -254,12 +256,17 @@ class VentilatorCore(QObject):
     def connect_arduino(self):
         ports = list(serial.tools.list_ports.comports())
         for p in ports:
-            if "Arduino" in p.description or "ttyACM" in p.device:
+            if "Arduino" in p.description or "ttyACM" in p.device or "ttyUSB" in p.device:
                 self.reader = SerialReader(p.device)
                 self.reader.new_data.connect(self._on_telemetry_updated)
                 self.reader.start()
                 return
         print("[SYSTEM] No Arduino found.")
+
+    def _on_prediction_ready(self, label, color, confidence, prob_normal, prob_obstr, prob_restr):
+        self._patient_status = label
+        self.patient_status_changed.emit()
+        self.ml_prediction_updated.emit(label, color, confidence, prob_normal, prob_obstr, prob_restr)
 
     def _on_telemetry_updated(self, t, pressure, volume, flow, calc_flow):
         self.telemetry_updated.emit(t, pressure, volume, flow, calc_flow)
@@ -297,6 +304,9 @@ class VentilatorCore(QObject):
     def exitApp(self):
         self.shutdown()
         os._exit(0)
+    @Property(str, notify=patient_status_changed)
+    def patient_status(self):
+        return self._patient_status
 
     @Property(str, notify=mode_changed)
     def mode(self): return self._mode
