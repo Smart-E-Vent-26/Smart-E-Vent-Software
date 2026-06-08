@@ -20,7 +20,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 # Layout:  <project_root>/ML/pressure_classifier.py
 #          <project_root>/ML/weights/pressure_models.pkl
 _THIS_DIR    = os.path.dirname(os.path.abspath(__file__))
-_ML_DIR      = os.path.join(_THIS_DIR,"..", "ML")
+_ML_DIR      = os.path.abspath(os.path.join(_THIS_DIR, "..", "ML"))
 sys.path.insert(0, _ML_DIR)
 from pressure_classifier import extract_pressure_features   # pure function, no side-effects
 
@@ -49,7 +49,8 @@ class MLClassifier(QObject):
                      prob_normal:float, prob_obstr:float, prob_restr:float)
     """
 
-    prediction_ready = Signal(str, str, float, float, float, float)
+    prediction_ready = Signal(str, str, float, float, float, float, 
+                              arguments=["label", "color", "confidence", "probNormal", "probObstr", "probRestr"])
 
     _COLORS = {
         "Normal":      "#2ecc71",
@@ -217,7 +218,8 @@ class VentilatorCore(QObject):
 
     # ML result — consumed by the QML diagnostic panel
     # Args: label, hex_color, confidence, prob_normal, prob_obstr, prob_restr
-    ml_prediction_updated = Signal(str, str, float, float, float, float)
+    ml_prediction_updated = Signal(str, str, float, float, float, float,
+                                   arguments=["label", "color", "confidence", "probNormal", "probObstr", "probRestr"])
 
     rr_changed           = Signal()
     tidal_volume_changed = Signal()
@@ -246,7 +248,7 @@ class VentilatorCore(QObject):
 
         # ML classifier — loads weights at startup, emits directly to QML signal
         self.classifier = MLClassifier(self)
-        self.classifier.prediction_ready.connect(self.ml_prediction_updated)
+        self.classifier.prediction_ready.connect(self.ml_prediction_updated.emit)
 
         self.reader = None
         self.connect_arduino()
