@@ -97,9 +97,126 @@ ApplicationWindow {
         }
     }
 
+    // ── Header Bar ───────────────────────────────────────────────────────────
+    Rectangle {
+        id: headerBar
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 70
+        color: "#1a1a1a"
+        border.color: "#333"
+        border.width: 1
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 20
+            anchors.rightMargin: 80 // Leave space for exit button
+            spacing: 20
+
+            Text {
+                text: "SMART E-VENT"
+                color: "white"
+                font.pixelSize: 22
+                font.bold: true
+                font.letterSpacing: 2
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Rectangle {
+                width: 60
+                height: 30
+                color: "#2a2a2a"
+                radius: 6
+                border.color: "#444"
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: VentCore.mode
+                    color: "#00ffcc"
+                    font.bold: true
+                    font.pixelSize: 14
+                }
+            }
+
+            // Spacer
+            Item { Layout.fillWidth: true }
+
+            // ── Center Patient State Indicator ──
+            Rectangle {
+                id: stateBadge
+                height: 46
+                implicitWidth: stateText.implicitWidth + 40
+                radius: 23
+                color: {
+                    var s = VentCore.vent_state;
+                    if (s.indexOf("Inhaling") !== -1) return "#10332c";
+                    if (s.indexOf("Holding") !== -1) return "#0b2535";
+                    if (s.indexOf("Exhaling") !== -1) return "#352b0b";
+                    if (s.indexOf("Pausing") !== -1) return "#222222";
+                    if (s.indexOf("Ready") !== -1) return "#0f2f1d";
+                    if (s.indexOf("Calibrating") !== -1) return "#0b2535";
+                    if (s.indexOf("Fault") !== -1) return "#3d1414";
+                    return "#1e1e1e";
+                }
+                border.width: 2
+                border.color: {
+                    var s = VentCore.vent_state;
+                    if (s.indexOf("Inhaling") !== -1) return "#00ffcc";
+                    if (s.indexOf("Holding") !== -1) return "#3498db";
+                    if (s.indexOf("Exhaling") !== -1) return "#ffcc00";
+                    if (s.indexOf("Pausing") !== -1) return "#888888";
+                    if (s.indexOf("Ready") !== -1) return "#2ecc71";
+                    if (s.indexOf("Calibrating") !== -1) return "#3498db";
+                    if (s.indexOf("Fault") !== -1) return "#e74c3c";
+                    return "#555555";
+                }
+
+                RowLayout {
+                    anchors.centerIn: parent
+                    spacing: 10
+
+                    // Animated status dot
+                    Rectangle {
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: stateBadge.border.color
+                        
+                        SequentialAnimation on opacity {
+                            loops: Animation.Infinite
+                            running: {
+                                var s = VentCore.vent_state;
+                                return s.indexOf("Inhaling") !== -1 || s.indexOf("Calibrating") !== -1 || s.indexOf("Fault") !== -1;
+                            }
+                            NumberAnimation { to: 0.3; duration: 500 }
+                            NumberAnimation { to: 1.0; duration: 500 }
+                        }
+                    }
+
+                    Text {
+                        id: stateText
+                        text: "PATIENT STATE: " + VentCore.vent_state.toUpperCase()
+                        color: "white"
+                        font.pixelSize: 15
+                        font.bold: true
+                        font.letterSpacing: 1
+                    }
+                }
+            }
+
+            // Spacer
+            Item { Layout.fillWidth: true }
+        }
+    }
+
     // ── Main Layout ──────────────────────────────────────────────────────────
     GridLayout {
-        anchors.fill: parent; anchors.margins: 10
+        anchors.top: headerBar.bottom
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: 10
         columns: 2; columnSpacing: 10
 
         // ── Left Panel: Charts + ML Diagnostic ──────────────────────────────
@@ -191,9 +308,9 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 font.pixelSize: 30; font.bold: true; color: "white"
                                 text: {
-                                    if (mlLabel.text === "Normal")      return "✓"
-                                    if (mlLabel.text === "Obstructive") return "⚠"
-                                    if (mlLabel.text === "Restrictive") return "⚠"
+                                    if (VentCore.patient_status === "Normal")      return "✓"
+                                    if (VentCore.patient_status === "Obstructive") return "⚠"
+                                    if (VentCore.patient_status === "Restrictive") return "⚠"
                                     return "?"
                                 }
                             }
@@ -212,14 +329,14 @@ ApplicationWindow {
 
                             Text {
                                 id: mlLabel
-                                text: "Awaiting breath…"
+                                text: "Patient Status: " + VentCore.patient_status
                                 color: mlAccent.color
                                 font.pixelSize: 22; font.bold: true
                                 Behavior on color { ColorAnimation { duration: 400 } }
                             }
                             Text {
                                 id: mlConfidence
-                                text: "ML model ready — waiting for first breath cycle"
+                                text: "System active — awaiting breath analysis"
                                 color: "#aaaaaa"; font.pixelSize: 12
                             }
                         }
@@ -448,7 +565,6 @@ ApplicationWindow {
         function onMl_prediction_updated(label, color, confidence,
                                           probNormal, probObstr, probRestr) {
             mlAccent.color           = color
-            mlLabel.text             = label
             mlConfidence.text        = "Confidence: " + Math.round(confidence * 100)
                                        + "%   (3-breath rolling vote)"
             barNormal.prob           = probNormal

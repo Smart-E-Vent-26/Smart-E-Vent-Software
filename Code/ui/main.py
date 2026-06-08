@@ -154,6 +154,7 @@ class MLClassifier(QObject):
 class SerialReader(QThread):
     """Background thread to read Arduino telemetry without blocking the UI."""
     new_data = Signal(float, float, float, float, float)  # t, pressure, volume, flow, calc_flow
+    state_changed = Signal(str)  # Emits new state/phase string
 
     def __init__(self, port):
         super().__init__()
@@ -181,6 +182,34 @@ class SerialReader(QThread):
                 if self.arduino.in_waiting:
                     line = self.arduino.readline().decode('utf-8', errors='ignore').strip()
                     if line:
+                        # Parse FSM state changes or phase labels
+                        state = None
+                        if "[FSM] Waiting for homing command" in line or "EMERGENCY STOPPED" in line:
+                            state = "BOOT"
+                        elif "[CAL] Retracting slowly" in line or "Retracting slowly" in line:
+                            state = "CALIBRATING"
+                        elif "System READY" in line or "[CAL] Already at home" in line or "Soft Stop Complete" in line:
+                            state = "READY"
+                        elif "[FSM] Ventilation STARTED" in line:
+                            state = "RUNNING"
+                        elif "FAULT" in line or "[FSM] FAULT" in line:
+                            state = "FAULT"
+                        elif "Soft Stop requested" in line:
+                            state = "SOFT_STOP"
+                        elif "--- INHALE ---" in line:
+                            state = "INH"
+                        elif "--- EXHALE ---" in line:
+                            state = "EXH"
+                        
+                        tokens = line.split()
+                        if tokens:
+                            first_token = tokens[0]
+                            if first_token in ["INH", "HLD", "EXH", "PAU", "S_W", "S_R"]:
+                                state = first_token
+                        
+                        if state:
+                            self.state_changed.emit(state)
+
                         f_match  = self.re_flow.search(line)
                         cf_match = self.re_calc_flow.search(line)
                         v_match  = self.re_vol.search(line)
@@ -220,6 +249,8 @@ class VentilatorCore(QObject):
     # Args: label, hex_color, confidence, prob_normal, prob_obstr, prob_restr
     ml_prediction_updated = Signal(str, str, float, float, float, float,
                                    arguments=["label", "color", "confidence", "probNormal", "probObstr", "probRestr"])
+    patient_status_changed = Signal()
+    vent_state_changed = Signal()
 
     rr_changed           = Signal()
     tidal_volume_changed = Signal()
@@ -241,6 +272,8 @@ class VentilatorCore(QObject):
         self._log_filename = os.path.expanduser("~/vent_data.csv")
         self._log_limit    = 10000
         self.log_buffer    = deque(maxlen=self._log_limit)
+        self._patient_status = "Standby"
+        self._vent_state = "Boot / Uncalibrated"
 
         self.log_timer = QTimer(self)
         self.log_timer.timeout.connect(self._flush_log)
@@ -248,7 +281,7 @@ class VentilatorCore(QObject):
 
         # ML classifier — loads weights at startup, emits directly to QML signal
         self.classifier = MLClassifier(self)
-        self.classifier.prediction_ready.connect(self.ml_prediction_updated.emit)
+        self.classifier.prediction_ready.connect(self._on_prediction_ready)
 
         self.reader = None
         self.connect_arduino()
@@ -256,12 +289,18 @@ class VentilatorCore(QObject):
     def connect_arduino(self):
         ports = list(serial.tools.list_ports.comports())
         for p in ports:
-            if "Arduino" in p.description or "ttyACM" in p.device:
+            if "Arduino" in p.description or "ttyACM" in p.device or "ttyUSB" in p.device:
                 self.reader = SerialReader(p.device)
                 self.reader.new_data.connect(self._on_telemetry_updated)
+                self.reader.state_changed.connect(self._on_state_changed)
                 self.reader.start()
                 return
         print("[SYSTEM] No Arduino found.")
+
+    def _on_prediction_ready(self, label, color, confidence, prob_normal, prob_obstr, prob_restr):
+        self._patient_status = label
+        self.patient_status_changed.emit()
+        self.ml_prediction_updated.emit(label, color, confidence, prob_normal, prob_obstr, prob_restr)
 
     def _on_telemetry_updated(self, t, pressure, volume, flow, calc_flow):
         self.telemetry_updated.emit(t, pressure, volume, flow, calc_flow)
@@ -288,17 +327,56 @@ class VentilatorCore(QObject):
             self.reader.send_cmd(cmd)
 
     @Slot()
-    def startVentilation(self): self.send_command("S")
+    def startVentilation(self):
+        self._vent_state = "Running"
+        self.vent_state_changed.emit()
+        self.send_command("S")
     @Slot()
-    def stopVentilation(self):  self.send_command("X")
+    def stopVentilation(self):
+        self._vent_state = "Pausing..."
+        self.vent_state_changed.emit()
+        self.send_command("X")
     @Slot()
-    def emergencyStop(self):    self.send_command("E")
+    def emergencyStop(self):
+        self._vent_state = "Boot / Uncalibrated"
+        self.vent_state_changed.emit()
+        self.send_command("E")
     @Slot()
-    def calibrateHome(self):    self.send_command("H")
+    def calibrateHome(self):
+        self._vent_state = "Calibrating"
+        self.vent_state_changed.emit()
+        self.send_command("H")
     @Slot()
     def exitApp(self):
         self.shutdown()
         os._exit(0)
+    @Property(str, notify=patient_status_changed)
+    def patient_status(self):
+        return self._patient_status
+
+    @Property(str, notify=vent_state_changed)
+    def vent_state(self):
+        return self._vent_state
+
+    def _on_state_changed(self, state_code):
+        mapping = {
+            "BOOT": "Boot / Uncalibrated",
+            "CALIBRATING": "Calibrating",
+            "READY": "Ready",
+            "RUNNING": "Running",
+            "FAULT": "Fault",
+            "SOFT_STOP": "Pausing...",
+            "INH": "Inhaling (Inspiration)",
+            "HLD": "Holding (Plateau)",
+            "EXH": "Exhaling (Expiration)",
+            "PAU": "Pausing (Expiratory Pause)",
+            "S_W": "Soft Stop Wait",
+            "S_R": "Soft Stop Retract"
+        }
+        friendly_state = mapping.get(state_code, state_code)
+        if self._vent_state != friendly_state:
+            self._vent_state = friendly_state
+            self.vent_state_changed.emit()
 
     @Property(str, notify=mode_changed)
     def mode(self): return self._mode
